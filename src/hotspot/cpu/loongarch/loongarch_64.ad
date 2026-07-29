@@ -1313,12 +1313,12 @@ uint MachBreakpointNode::size(PhaseRegAlloc* ra_) const {
 // !!!!! Special hack to get all type of calls to specify the byte offset
 //       from the start of the call to the point where the return address
 //       will point.
-int MachCallStaticJavaNode::ret_addr_offset() {
+int MachCallStaticJavaNode::ret_addr_offset() const {
   // bl
   return NativeCall::instruction_size;
 }
 
-int MachCallDynamicJavaNode::ret_addr_offset() {
+int MachCallDynamicJavaNode::ret_addr_offset() const {
   // lu12i_w IC_Klass,
   // ori IC_Klass,
   // lu32i_d IC_Klass
@@ -2004,7 +2004,7 @@ void BoxLockNode::emit(C2_MacroAssembler *masm, PhaseRegAlloc *ra_) const {
   }
 }
 
-int MachCallRuntimeNode::ret_addr_offset() {
+int MachCallRuntimeNode::ret_addr_offset() const {
   // pcaddu18i
   // jirl
   return NativeFarCall::instruction_size;
