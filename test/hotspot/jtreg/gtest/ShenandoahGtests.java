@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -19,17 +19,13 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
+ *
  */
 
-#include <jni.h>
-
-#include <Windows.h>
-
-// Use an exception code that causes the Windows FAILED() macro to return true.
-// Windows AArch64 uses vectored exception handling and therefore runs error
-// reporting only for failed exception codes.
-const DWORD EX_CODE = 0xdeadbeef;
-
-JNIEXPORT void JNICALL Java_UncaughtNativeExceptionTest_00024Crasher_throwException(JNIEnv* env, jclass cls) {
-  RaiseException(EX_CODE, EXCEPTION_NONCONTINUABLE, 0, NULL);
-}
+/* @test
+ * @summary Run Shenandoah gtests
+ * @library /test/lib
+ * @requires vm.gc.Shenandoah
+ * @requires vm.debug
+ * @run main/native GTestWrapper --gtest_filter=Shenandoah*
+ */
