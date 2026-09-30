@@ -8775,6 +8775,29 @@ instruct mulI_Reg_Reg(mRegI dst, mRegI src1, mRegI src2) %{
   ins_pipe( ialu_mult );
 %}
 
+// dst = src1 * src2 + src3 * src4, all operands are shorts widened to int.
+// LoongArch has no integer multiply-add, so this needs 3 instructions.  The
+// first product goes into the assembler scratch AT so that dst is only written
+// after every source has been read (dst may then alias any of the sources).
+// Providing this rule also lets PhaseIdealLoop::convert_add_to_muladd() fire,
+// which is the prerequisite for SLP-vectorizing short[] dot products into
+// MulAddVS2VI (vmulwev/vmulwod).
+instruct muladdS2I_Reg_Reg(mRegI dst, mRegIorL2I src1, mRegIorL2I src2,
+                           mRegIorL2I src3, mRegIorL2I src4) %{
+  match(Set dst (MulAddS2I (Binary src1 src2) (Binary src3 src4)));
+
+  ins_cost(300);
+  format %{ "mul   AT, $src1, $src2\n\t"
+            "mul   $dst, $src3, $src4\n\t"
+            "add.w $dst, $dst, AT\t# @muladdS2I_Reg_Reg" %}
+  ins_encode %{
+    __ mul_w(AT, $src1$$Register, $src2$$Register);
+    __ mul_w($dst$$Register, $src3$$Register, $src4$$Register);
+    __ add_w($dst$$Register, $dst$$Register, AT);
+  %}
+  ins_pipe( ialu_mult );
+%}
+
 instruct divI_Reg_Reg(mRegI dst, mRegI src1, mRegI src2) %{
   match(Set dst (DivI src1 src2));
 
@@ -12313,6 +12336,29 @@ instruct bytes_reverse_short(mRegI dst, mRegIorL2I src) %{
   ins_pipe( ialu_reg_reg );
 %}
 
+//---------- Bit Reverse Instructions ------------------------------------------
+// Integer.reverse / Long.reverse: bitrev.w sign-extends its 32-bit result, which
+// matches this port's invariant that 32-bit values live sign-extended in GPRs.
+instruct bit_reverse_int(mRegI dst, mRegIorL2I src) %{
+  match(Set dst (ReverseI src));
+
+  format %{ "bitrev.w  $dst, $src\t# bit reverse (int)" %}
+  ins_encode %{
+    __ bitrev_w($dst$$Register, $src$$Register);
+  %}
+  ins_pipe( ialu_reg_reg );
+%}
+
+instruct bit_reverse_long(mRegL dst, mRegL src) %{
+  match(Set dst (ReverseL src));
+
+  format %{ "bitrev.d  $dst, $src\t# bit reverse (long)" %}
+  ins_encode %{
+    __ bitrev_d($dst$$Register, $src$$Register);
+  %}
+  ins_pipe( ialu_reg_reg );
+%}
+
 //---------- Zeros Count Instructions ------------------------------------------
 // CountLeadingZerosINode CountTrailingZerosINode
 instruct countLeadingZerosI(mRegI dst, mRegIorL2I src) %{
@@ -13452,7 +13498,6 @@ instruct muladd8Sto4I(vReg dst, vReg src1, vReg src2) %{
   match(Set dst (MulAddVS2VI src1 src2));
   format %{ "muladdvs2vi    $dst, $src1, $src2\t# @muladd8Sto4I" %}
   ins_encode %{
-    DEBUG_ONLY(Unimplemented()); // unverified
     __ vmulwev_w_h(fscratch, $src1$$FloatRegister, $src2$$FloatRegister);
     __ vmulwod_w_h($dst$$FloatRegister, $src1$$FloatRegister, $src2$$FloatRegister);
     __ vadd_w($dst$$FloatRegister, fscratch, $dst$$FloatRegister);
@@ -13465,7 +13510,6 @@ instruct muladd16Sto8I(vReg dst, vReg src1, vReg src2) %{
   match(Set dst (MulAddVS2VI src1 src2));
   format %{ "muladdvs2vi    $dst, $src1, $src2\t# @muladd16Sto8I" %}
   ins_encode %{
-    DEBUG_ONLY(Unimplemented()); // unverified
     __ xvmulwev_w_h(fscratch, $src1$$FloatRegister, $src2$$FloatRegister);
     __ xvmulwod_w_h($dst$$FloatRegister, $src1$$FloatRegister, $src2$$FloatRegister);
     __ xvadd_w($dst$$FloatRegister, fscratch, $dst$$FloatRegister);
