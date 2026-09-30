@@ -33,6 +33,14 @@ public:
   void cmp_branch_long(int flag, Register op1, Register op2, Label* L, bool is_signed);
   void cmp_branchEqNe_off21(int flag, Register op1, Label& L);
 
+  // Branch on signed 64-bit multiply overflow, as required by the
+  // OverflowMulL C2 node (Math.multiplyExact(long,long)).
+  // `flag` is a cmpOp cmpcode: 0x07 == overflow, 0x08 == no_overflow.
+  // The product is exact iff mulh_d(op1,op2) == mul_d(op1,op2) >> 63.
+  void overflow_mulL_branch(int flag, Register op1, Register op2,
+                            Register tmp_lo, Register tmp_hi,
+                            Register tmp_sign, Label* L);
+
   void fast_lock_c2(Register oop, Register box,
                     Register flag, Register disp_hdr,
                     Register tmp, Register tmp2);

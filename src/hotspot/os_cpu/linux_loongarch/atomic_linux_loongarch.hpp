@@ -134,6 +134,18 @@
       ".iflt    \\var                                                 \n\t" \
       ".endif                                                         \n\t" \
       ".endm                                                          \n\t" \
+      ".macro amcas_b rd, rk, rj                                      \n\t" \
+      "parse_r d, \\rd                                                \n\t" \
+      "parse_r j, \\rj                                                \n\t" \
+      "parse_r k, \\rk                                                \n\t" \
+      ".word ((0b00111000010110000 << 15) | (k << 10) | (j << 5) | d) \n\t" \
+      ".endm                                                          \n\t" \
+      ".macro amcas_h rd, rk, rj                                      \n\t" \
+      "parse_r d, \\rd                                                \n\t" \
+      "parse_r j, \\rj                                                \n\t" \
+      "parse_r k, \\rk                                                \n\t" \
+      ".word ((0b00111000010110001 << 15) | (k << 10) | (j << 5) | d) \n\t" \
+      ".endm                                                          \n\t" \
       ".macro amcas_w rd, rk, rj                                      \n\t" \
       "parse_r d, \\rd                                                \n\t" \
       "parse_r j, \\rj                                                \n\t" \
@@ -151,6 +163,12 @@
       "parse_r j, \\rj                                                \n\t" \
       "parse_r k, \\rk                                                \n\t" \
       ".word ((0b00111000010110100 << 15) | (k << 10) | (j << 5) | d) \n\t" \
+      ".endm                                                          \n\t" \
+      ".macro amcas_db_h rd, rk, rj                                   \n\t" \
+      "parse_r d, \\rd                                                \n\t" \
+      "parse_r j, \\rj                                                \n\t" \
+      "parse_r k, \\rk                                                \n\t" \
+      ".word ((0b00111000010110101 << 15) | (k << 10) | (j << 5) | d) \n\t" \
       ".endm                                                          \n\t" \
       ".macro amcas_db_w rd, rk, rj                                   \n\t" \
       "parse_r d, \\rd                                                \n\t" \
@@ -290,8 +308,199 @@ inline T Atomic::PlatformXchg<8>::operator()(T volatile* dest,
   return old_value;
 }
 
+// Native 1-byte compare-and-swap.
+//
+// Uses the AMCAS{,_DB}.B instruction when available.  Two details matter for
+// correctness and are easy to get wrong:
+//
+//  * The comparison only involves the low 8 bits of the operands, and only
+//    1 byte is stored.  Adjacent bytes of the containing word are never
+//    touched, so this cannot cause spurious failures or lost updates on
+//    neighbours (which is what the CmpxchgByteUsingInt fallback risks).
+//  * The old value written to rd is *sign extended* from bit 7 (this is
+//    documented behaviour of the AMCAS.B instruction, and it is why the
+//    macroAssembler path uses bstrpick.w after amcas.b).  The result is
+//    therefore masked down to 8 bits before being returned.
+//
+// When UseAMCAS is off we keep the previous ll/sc based byte-in-word
+// implementation, which is correct (just wider than necessary).
 template<>
-struct Atomic::PlatformCmpxchg<1> : Atomic::CmpxchgByteUsingInt {};
+template<typename T>
+inline T Atomic::PlatformCmpxchg<1>::operator()(T volatile* dest,
+                                                T compare_value,
+                                                T exchange_value,
+                                                atomic_memory_order order) const {
+  STATIC_ASSERT(1 == sizeof(T));
+  if (!UseAMCAS) {
+    return Atomic::CmpxchgByteUsingInt()(dest, compare_value, exchange_value, order);
+  }
+
+  AMCAS_MACRO
+  uint64_t prev;
+  uint64_t old_value = (uint64_t)(uint8_t)compare_value;
+  uint64_t new_value = (uint64_t)(uint8_t)exchange_value;
+
+  switch (order) {
+  case memory_order_relaxed:
+    asm volatile (
+      " move %[prev], %[_old] \n\t"
+      " amcas_b %[prev], %[_new], %[dest] \n\t"
+      : [prev] "+&r" (prev)
+      : [_old] "r" (old_value), [_new] "r" (new_value), [dest] "r" (dest)
+      : "memory");
+    break;
+  case memory_order_acquire:
+    asm volatile (
+      " move %[prev], %[_old] \n\t"
+      " amcas_b %[prev], %[_new], %[dest] \n\t"
+      " dbar 0x14 \n\t"
+      : [prev] "+&r" (prev)
+      : [_old] "r" (old_value), [_new] "r" (new_value), [dest] "r" (dest)
+      : "memory");
+    break;
+  case memory_order_release:
+    asm volatile (
+      " move %[prev], %[_old] \n\t"
+      " dbar 0x12 \n\t"
+      " amcas_b %[prev], %[_new], %[dest] \n\t"
+      : [prev] "+&r" (prev)
+      : [_old] "r" (old_value), [_new] "r" (new_value), [dest] "r" (dest)
+      : "memory");
+    break;
+  default:
+    asm volatile (
+      " move %[prev], %[_old] \n\t"
+      " amcas_db_b %[prev], %[_new], %[dest] \n\t"
+      : [prev] "+&r" (prev)
+      : [_old] "r" (old_value), [_new] "r" (new_value), [dest] "r" (dest)
+      : "memory");
+    break;
+  }
+
+  return (T)(uint8_t)prev;  // amcas.b returns a sign-extended old value
+}
+
+// Native 2-byte compare-and-swap, analogous to the byte case above.
+template<>
+template<typename T>
+inline T Atomic::PlatformCmpxchg<2>::operator()(T volatile* dest,
+                                                T compare_value,
+                                                T exchange_value,
+                                                atomic_memory_order order) const {
+  STATIC_ASSERT(2 == sizeof(T));
+  if (!UseAMCAS) {
+    // No AMCAS.H available.  LoongArch only offers ll.w/sc.w and ll.d/sc.d
+    // (there is no ll.h/sc.h), so emulate the halfword CAS the same way
+    // CmpxchgByteUsingInt does for bytes: align down to the containing word
+    // and CAS that, splicing in only the halfword we want to update.
+    //
+    // The comparison still only involves the intended halfword, so a
+    // differing neighbour yields a correct "no match" result rather than a
+    // spurious failure.
+    uint32_t* aligned_dest = (uint32_t*)align_down((void*)dest, sizeof(uint32_t));
+    uint32_t offset = (uint32_t)pointer_delta(dest, aligned_dest, 1);
+    uint32_t shift = BitsPerByte * offset;  // little endian
+    uint32_t old_h = (uint32_t)(uint16_t)compare_value;
+    uint32_t new_h = (uint32_t)(uint16_t)exchange_value;
+
+    uint32_t cur = (Atomic::load(aligned_dest) & ~(0xffffU << shift)) | (old_h << shift);
+    uint32_t res, temp_w;
+    do {
+      uint32_t new_w = (cur & ~(0xffffU << shift)) | (new_h << shift);
+      switch (order) {
+      case memory_order_relaxed:
+      case memory_order_release:
+        if (UseSameCachelineLoadLoadReorder) {
+          asm volatile (
+            "1: ll.w %[prev], %[dest]     \n\t"
+            "   bne  %[prev], %[_old], 2f \n\t"
+            "   move %[temp], %[_new]     \n\t"
+            "   sc.w %[temp], %[dest]     \n\t"
+            "   beqz %[temp], 1b          \n\t"
+            "   b    3f                   \n\t"
+            "2: dbar 0x700                \n\t"
+            "3:                           \n\t"
+            : [prev] "=&r" (res), [temp] "=&r" (temp_w)
+            : [_old] "r" (cur), [_new] "r" (new_w), [dest] "ZC" (*aligned_dest)
+            : "memory");
+        } else {
+          asm volatile (
+            "1: ll.w %[prev], %[dest]     \n\t"
+            "   bne  %[prev], %[_old], 2f \n\t"
+            "   move %[temp], %[_new]     \n\t"
+            "   sc.w %[temp], %[dest]     \n\t"
+            "   beqz %[temp], 1b          \n\t"
+            "2:                           \n\t"
+            : [prev] "=&r" (res), [temp] "=&r" (temp_w)
+            : [_old] "r" (cur), [_new] "r" (new_w), [dest] "ZC" (*aligned_dest)
+            : "memory");
+        }
+        break;
+      default:
+        asm volatile (
+          "1: ll.w %[prev], %[dest]     \n\t"
+          "   bne  %[prev], %[_old], 2f \n\t"
+          "   move %[temp], %[_new]     \n\t"
+          "   sc.w %[temp], %[dest]     \n\t"
+          "   beqz %[temp], 1b          \n\t"
+          "   b    3f                   \n\t"
+          "2: dbar 0x14                 \n\t"
+          "3:                           \n\t"
+          : [prev] "=&r" (res), [temp] "=&r" (temp_w)
+          : [_old] "r" (cur), [_new] "r" (new_w), [dest] "ZC" (*aligned_dest)
+          : "memory");
+        break;
+      }
+      if (res == cur) break;  // success
+      cur = res;
+    } while (true);
+    return (T)(uint16_t)(cur >> shift);
+  }
+
+  AMCAS_MACRO
+  uint64_t prev;
+  uint64_t old_value = (uint64_t)(uint16_t)compare_value;
+  uint64_t new_value = (uint64_t)(uint16_t)exchange_value;
+
+  switch (order) {
+  case memory_order_relaxed:
+    asm volatile (
+      " move %[prev], %[_old] \n\t"
+      " amcas_h %[prev], %[_new], %[dest] \n\t"
+      : [prev] "+&r" (prev)
+      : [_old] "r" (old_value), [_new] "r" (new_value), [dest] "r" (dest)
+      : "memory");
+    break;
+  case memory_order_acquire:
+    asm volatile (
+      " move %[prev], %[_old] \n\t"
+      " amcas_h %[prev], %[_new], %[dest] \n\t"
+      " dbar 0x14 \n\t"
+      : [prev] "+&r" (prev)
+      : [_old] "r" (old_value), [_new] "r" (new_value), [dest] "r" (dest)
+      : "memory");
+    break;
+  case memory_order_release:
+    asm volatile (
+      " move %[prev], %[_old] \n\t"
+      " dbar 0x12 \n\t"
+      " amcas_h %[prev], %[_new], %[dest] \n\t"
+      : [prev] "+&r" (prev)
+      : [_old] "r" (old_value), [_new] "r" (new_value), [dest] "r" (dest)
+      : "memory");
+    break;
+  default:
+    asm volatile (
+      " move %[prev], %[_old] \n\t"
+      " amcas_db_h %[prev], %[_new], %[dest] \n\t"
+      : [prev] "+&r" (prev)
+      : [_old] "r" (old_value), [_new] "r" (new_value), [dest] "r" (dest)
+      : "memory");
+    break;
+  }
+
+  return (T)(uint16_t)prev;  // amcas.h returns a sign-extended old value
+}
 
 template<>
 template<typename T>

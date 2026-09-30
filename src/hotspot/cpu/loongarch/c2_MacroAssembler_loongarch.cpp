@@ -2425,6 +2425,38 @@ void C2_MacroAssembler::cmp_branch_long(int flag, Register op1, Register op2, La
     bind(not_taken);
 }
 
+// Math.multiplyExact(long,long) support: the 128-bit signed product of op1 and
+// op2 is exact iff its high half is a pure sign extension of its low half, i.e.
+//   mulh_d(op1, op2) == mul_d(op1, op2) >> 63      (arithmetic shift)
+// LoongArch has no condition-code register, so the test is materialized into a
+// general register and branched on directly:
+//   mulh_d  tmp_hi, op1, op2   ; tmp_hi = bits 64..127 of the signed product
+//   mul_d   tmp_lo, op1, op2   ; tmp_lo = bits  0..63 of the signed product
+//   srai_d  tmp_sign, tmp_lo, 63 ; tmp_sign = the value tmp_hi must equal
+//   bne/beq tmp_hi, tmp_sign, L  ; exact iff they are equal
+// Note that tmp_hi must not be reused as the shift destination, or the real
+// high half would be destroyed before it has been compared.
+void C2_MacroAssembler::overflow_mulL_branch(int flag, Register op1, Register op2,
+                                             Register tmp_lo, Register tmp_hi,
+                                             Register tmp_sign, Label* L) {
+  assert_different_registers(op1, op2, tmp_lo, tmp_hi, tmp_sign);
+
+  mulh_d(tmp_hi, op1, op2);       // high half of the signed product
+  mul_d(tmp_lo, op1, op2);        // low half of the signed product
+  srai_d(tmp_sign, tmp_lo, 63);   // sign extension the high half must match
+
+  switch (flag) {
+    case 0x07: // overflow: the real high half did not match the sign extension
+      bne(tmp_hi, tmp_sign, *L);
+      break;
+    case 0x08: // no_overflow: the product was a pure sign-extended 64-bit value
+      beq(tmp_hi, tmp_sign, *L);
+      break;
+    default:
+      Unimplemented();
+  }
+}
+
 void C2_MacroAssembler::cmp_branchEqNe_off21(int flag, Register op1, Label& L) {
     switch(flag) {
       case 0x01: //equal

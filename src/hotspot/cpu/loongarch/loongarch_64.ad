@@ -8974,6 +8974,48 @@ instruct mulHiL_reg_reg(mRegL dst, mRegL src1, mRegL src2) %{
   ins_pipe( fpu_arith);
 %}
 
+// Math.multiplyExact(long,long) overflow check.
+//
+// LoongArch has no condition-code register, so unlike x86/aarch64 we cannot
+// "Set cr (OverflowMulL ...)" and then test the flags.  C2 only ever consumes
+// this node through a BoolNode feeding an IfNode (see
+// LibraryCallKit::inline_math_mathExact), so the If form below is sufficient,
+// and match_rule_supported(Op_OverflowMulL) is enabled for it.
+//
+// The product op1*op2 fits in 64 bits exactly when the high half of the
+// 128-bit signed product equals the sign extension of the low half:
+//     mulh_d hi, op1, op2 ; mul_d lo, op1, op2 ; srai_d s, lo, 63
+//     exact <=> hi == s
+instruct overflowMulL_reg_branch(cmpOp cmp, mRegLorI2L op1, mRegLorI2L op2,
+                                 mRegL tmp1, mRegL tmp2, mRegL tmp3,
+                                 label labl) %{
+  match(If cmp (OverflowMulL op1 op2));
+  predicate(n->in(1)->as_Bool()->_test._test == BoolTest::overflow ||
+            n->in(1)->as_Bool()->_test._test == BoolTest::no_overflow);
+  effect(USE labl, TEMP tmp1, TEMP tmp2, TEMP tmp3);
+
+  format %{ "mulh_d  $tmp1, $op1, $op2\t# overflow check long\n\t"
+            "mul_d   $tmp2, $op1, $op2\n\t"
+            "srai_d  $tmp3, $tmp2, 63\n\t"
+            "b$cmp   $tmp1, $tmp3, $labl" %}
+
+  ins_cost(450);  // 4 instructions, but the branch is rare
+  ins_encode %{
+    Register op1 = as_Register($op1$$reg);
+    Register op2 = as_Register($op2$$reg);
+    Label*   L   = $labl$$label;
+    int      flag = $cmp$$cmpcode;
+
+    __ overflow_mulL_branch(flag, op1, op2,
+                            as_Register($tmp1$$reg),
+                            as_Register($tmp2$$reg),
+                            as_Register($tmp3$$reg), L);
+  %}
+
+  ins_pc_relative(1);
+  ins_pipe( pipe_slow );
+%}
+
 instruct umulHiL_reg_reg(mRegL dst, mRegL src1, mRegL src2) %{
   match(Set dst (UMulHiL src1 src2));
   format %{ "mulh.du  $dst, $src1, $src2 @umulHiL_reg_reg" %}
