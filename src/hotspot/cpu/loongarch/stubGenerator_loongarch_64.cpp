@@ -5251,6 +5251,135 @@ static const int64_t right_3_bits = right_n_bits(3);
     return start;
   }
 
+  // Vectorized array mismatch, used by Arrays.equals/mismatch (via
+  // jdk.internal.util.ArraysSupport::vectorizedMismatch) and BigInteger/BitSet equals.
+  //
+  // Arguments (the caller has already folded the array offsets into the addresses):
+  //   c_rarg0 - address of the first element of the first array
+  //   c_rarg1 - address of the first element of the second array
+  //   c_rarg2 - number of elements to compare
+  //   c_rarg3 - log2 of the element size (0..3)
+  //
+  // Result:
+  //   V0 - index of the first mismatching element, or -1 if all elements match
+  //
+  // The vector loop only answers "are these 64 (LSX: 32) bytes all equal?"; the
+  // mismatch position is always located by the scalar tail.  This keeps the hot
+  // loop short and the (rare) mismatch path simple.  Two vectors are compared per
+  // iteration (xvseq + xvand + xvsetallnez) because the 64-byte block is ~1.5x
+  // faster than a single 32-byte block on LA664 (measured).
+  //
+  // LSX/LASX loads accept unaligned addresses, so no alignment peeling is needed
+  // (same assumption as the other vectorized stubs and the C2 string code).
+  address generate_vectorizedMismatch() {
+    __ align(CodeEntryAlignment);
+    StubGenStubId stub_id = StubGenStubId::vectorizedMismatch_id;
+    StubCodeMark mark(this, stub_id);
+
+    address start = __ pc();
+    __ block_comment("vectorizedMismatch {");
+
+    const Register pa     = c_rarg0;  // moving pointer into the first array
+    const Register pb     = c_rarg1;  // moving pointer into the second array
+    const Register remain = c_rarg2;  // element count, then remaining byte count
+    const Register scale  = c_rarg3;
+    const Register vsize  = T1;       // vector block size
+    const Register eight  = T8;
+    const Register offset = T6;       // bytes compared so far
+    const Register tmp1   = T2;
+    const Register tmp2   = T3;
+
+    const FloatRegister v0 = FT0, v1 = FT1, v2 = FT2, v3 = FT3, v4 = FT4, v5 = FT5;
+
+    const int vblock = UseLASX ? 64 : 32;   // bytes per vector iteration
+    const int vhalf  = UseLASX ? 32 : 16;   // bytes per vector
+
+    Label vec_loop, vec_advance, vec_done, tail8, tail8_found, tail_bytes, tail_byte_loop;
+    Label equal, found, exit;
+
+    __ move(offset, R0);
+    __ sll_d(remain, remain, scale);   // element count -> byte count
+
+    if (UseLASX || UseLSX) {
+      __ addi_d(vsize, R0, vblock);
+      __ bind(vec_loop);
+      __ blt(remain, vsize, vec_done);
+      if (UseLASX) {
+        __ xvld(v0, pa, 0);
+        __ xvld(v1, pb, 0);
+        __ xvld(v2, pa, vhalf);
+        __ xvld(v3, pb, vhalf);
+        __ xvseq_b(v4, v0, v1);          // 0xFF where the bytes are equal
+        __ xvseq_b(v5, v2, v3);
+        __ xvand_v(v4, v4, v5);
+        __ xvsetallnez_b(FCC0, v4);      // FCC0 = both halves fully equal
+      } else {
+        __ vld(v0, pa, 0);
+        __ vld(v1, pb, 0);
+        __ vld(v2, pa, vhalf);
+        __ vld(v3, pb, vhalf);
+        __ vseq_b(v4, v0, v1);
+        __ vseq_b(v5, v2, v3);
+        __ vand_v(v4, v4, v5);
+        __ vsetallnez_b(FCC0, v4);
+      }
+      __ bcnez(FCC0, vec_advance);
+      __ b(vec_done);                    // mismatch inside this block: the tail locates it
+      __ bind(vec_advance);
+      __ addi_d(pa, pa, vblock);
+      __ addi_d(pb, pb, vblock);
+      __ addi_d(offset, offset, vblock);
+      __ sub_d(remain, remain, vsize);
+      __ b(vec_loop);
+    }
+    __ bind(vec_done);
+
+    // Compare the remaining bytes (fewer than one vector block, or the block that
+    // mismatched), eight at a time first and then byte by byte.
+    __ addi_d(eight, R0, 8);
+    __ bind(tail8);
+    __ blt(remain, eight, tail_bytes);
+    __ ld_d(tmp1, pa, 0);
+    __ ld_d(tmp2, pb, 0);
+    __ bne(tmp1, tmp2, tail8_found);
+    __ addi_d(pa, pa, 8);
+    __ addi_d(pb, pb, 8);
+    __ addi_d(offset, offset, 8);
+    __ addi_d(remain, remain, -8);
+    __ b(tail8);
+
+    __ bind(tail8_found);
+    __ XOR(tmp1, tmp1, tmp2);
+    __ ctz_d(tmp1, tmp1);                // lowest differing bit
+    __ srli_d(tmp1, tmp1, 3);            // -> byte index inside the word
+    __ add_d(offset, offset, tmp1);
+    __ b(found);
+
+    __ bind(tail_bytes);
+    __ beqz(remain, equal);
+    __ bind(tail_byte_loop);
+    __ ld_bu(tmp1, pa, 0);
+    __ ld_bu(tmp2, pb, 0);
+    __ bne(tmp1, tmp2, found);
+    __ addi_d(pa, pa, 1);
+    __ addi_d(pb, pb, 1);
+    __ addi_d(offset, offset, 1);
+    __ addi_d(remain, remain, -1);
+    __ bnez(remain, tail_byte_loop);
+
+    __ bind(equal);
+    __ addi_d(V0, R0, -1);               // no mismatch
+    __ b(exit);
+
+    __ bind(found);
+    __ srl_d(V0, offset, scale);         // byte offset -> element index
+
+    __ bind(exit);
+    __ block_comment("} vectorizedMismatch");
+    __ jr(RA);
+    return start;
+  }
+
 #undef __
 #define __ masm->
 
@@ -5868,6 +5997,10 @@ static const int64_t right_3_bits = right_n_bits(3);
       }
     }
 #endif // COMPILER2
+
+    if (UseVectorizedMismatchIntrinsic) {
+      StubRoutines::_vectorizedMismatch = generate_vectorizedMismatch();
+    }
 
     StubRoutines::_upcall_stub_exception_handler = generate_upcall_stub_exception_handler();
     StubRoutines::_upcall_stub_load_target = generate_upcall_stub_load_target();

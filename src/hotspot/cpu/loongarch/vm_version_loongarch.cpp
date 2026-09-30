@@ -182,6 +182,17 @@ void VM_Version::get_processor_features() {
     FLAG_SET_DEFAULT(UseLASX, false);
   }
 
+  // ArraysSupport::vectorizedMismatch() is accelerated by a vectorized stub on
+  // this platform (StubGenerator::generate_vectorizedMismatch).
+  if (UseLASX || UseLSX) {
+    if (FLAG_IS_DEFAULT(UseVectorizedMismatchIntrinsic)) {
+      FLAG_SET_DEFAULT(UseVectorizedMismatchIntrinsic, true);
+    }
+  } else if (UseVectorizedMismatchIntrinsic) {
+    warning("vectorizedMismatch intrinsic is not available on this CPU");
+    FLAG_SET_DEFAULT(UseVectorizedMismatchIntrinsic, false);
+  }
+
   if (supports_lam_bh()) {
     if (FLAG_IS_DEFAULT(UseAMBH)) {
       FLAG_SET_DEFAULT(UseAMBH, true);
