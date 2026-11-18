@@ -182,6 +182,20 @@ void VM_Version::get_processor_features() {
     FLAG_SET_DEFAULT(UseLASX, false);
   }
 
+  // LoongArch has no scalar population-count instruction.  The vector unit
+  // implements it with vpcnt (see the popCountI/popCountL C2 rules), so the
+  // Integer/Long.bitCount intrinsic is only usable when LSX is available.
+  // Without this the intrinsic is rejected by the matcher and Integer.bitCount
+  // falls back to the ~15 instruction SWAR sequence.
+  if (UseLSX) {
+    if (FLAG_IS_DEFAULT(UsePopCountInstruction)) {
+      FLAG_SET_DEFAULT(UsePopCountInstruction, true);
+    }
+  } else if (UsePopCountInstruction) {
+    warning("PopCount instructions are not available on this CPU");
+    FLAG_SET_DEFAULT(UsePopCountInstruction, false);
+  }
+
   // ArraysSupport::vectorizedMismatch() is accelerated by a vectorized stub on
   // this platform (StubGenerator::generate_vectorizedMismatch).
   if (UseLASX || UseLSX) {

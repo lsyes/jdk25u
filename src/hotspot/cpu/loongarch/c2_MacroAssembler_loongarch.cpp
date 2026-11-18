@@ -32,6 +32,9 @@
 #include "opto/subnode.hpp"
 #include "runtime/objectMonitor.hpp"
 #include "runtime/stubRoutines.hpp"
+#ifdef LA_RUST_SCHED
+#include "la_sched_ffi.hpp"
+#endif
 #include "utilities/globalDefinitions.hpp"
 
 #ifdef PRODUCT
@@ -2342,6 +2345,60 @@ void C2_MacroAssembler::vector_compare(FloatRegister dst, FloatRegister src1, Fl
     }
   } else {
     ShouldNotReachHere();
+  }
+}
+
+// Emit the instruction sequence planned by the Rust scheduler for an unsigned
+// division or remainder by a constant divisor.  Fall back to the hardware
+// div/mod instruction if the planner rejects the input (for example when the
+// temporary register assignment is unusable).
+void C2_MacroAssembler::rust_udivmod(bool is64, bool ismod, julong d,
+                                     Register dst, Register src,
+                                     Register t1, Register t2) {
+#ifdef LA_RUST_SCHED
+  LaInsn plan[16];
+  int n = la_plan_udivmod(is64 ? 1 : 0, ismod ? 1 : 0, (unsigned long)d,
+                          dst->encoding(), src->encoding(),
+                          t1->encoding(), t2->encoding(), plan, 16);
+  if (n > 0) {
+    for (int i = 0; i < n; i++) {
+      Register rd = as_Register(plan[i].rd);
+      Register rj = as_Register(plan[i].rj);
+      Register rk = as_Register(plan[i].rk);
+      switch (plan[i].op) {
+        case LA_OP_MOVE_W:  move(rd, rj); break;
+        case LA_OP_MOVE_D:  move(rd, rj); break;
+        case LA_OP_LI:      li(rd, plan[i].imm); break;
+        case LA_OP_MULH_WU: mulh_wu(rd, rj, rk); break;
+        case LA_OP_MULH_DU: mulh_du(rd, rj, rk); break;
+        case LA_OP_SRLI_W:  srli_w(rd, rj, (int)plan[i].imm); break;
+        case LA_OP_SRLI_D:  srli_d(rd, rj, (int)plan[i].imm); break;
+        case LA_OP_SUB_W:   sub_w(rd, rj, rk); break;
+        case LA_OP_SUB_D:   sub_d(rd, rj, rk); break;
+        case LA_OP_ADD_W:   add_w(rd, rj, rk); break;
+        case LA_OP_ADD_D:   add_d(rd, rj, rk); break;
+        case LA_OP_MUL_W:   mul_w(rd, rj, rk); break;
+        case LA_OP_MUL_D:   mul_d(rd, rj, rk); break;
+        case LA_OP_AND:     AND(rd, rj, rk); break;
+        case LA_OP_ANDI:    andi(rd, rj, (int)plan[i].imm); break;
+        case LA_OP_SLTU:    sltu(rd, rj, rk); break;
+        case LA_OP_XORI:    xori(rd, rj, (int)plan[i].imm); break;
+        case LA_OP_DIV_WU:  div_wu(rd, rj, rk); break;
+        case LA_OP_DIV_DU:  div_du(rd, rj, rk); break;
+        case LA_OP_MOD_WU:  mod_wu(rd, rj, rk); break;
+        case LA_OP_MOD_DU:  mod_du(rd, rj, rk); break;
+        case LA_OP_ZEXT_W:  bstrpick_d(rd, rj, 31, 0); break;
+        default:            ShouldNotReachHere(); break;
+      }
+    }
+    return;
+  }
+#endif
+  li(t1, (jlong)d);
+  if (is64) {
+    if (ismod) { mod_du(dst, src, t1); } else { div_du(dst, src, t1); }
+  } else {
+    if (ismod) { mod_wu(dst, src, t1); } else { div_wu(dst, src, t1); }
   }
 }
 

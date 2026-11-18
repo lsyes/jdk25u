@@ -8501,6 +8501,54 @@ instruct addI_salI_Reg_Reg_immI_1_4(mRegI dst, mRegI src1, mRegI src2, immI_1_4 
   ins_pipe( ialu_reg_reg );
 %}
 
+// Commuted form.  MulINode::Ideal turns x*3, x*5 and x*9 into
+// AddI(LShiftI(x, k), x), i.e. the shift is in(1) while the rule above only
+// matches a shift in in(2); without this rule the two operations stay as
+// slli+add instead of a single alsl (GCC's "alsl3" pattern handles both
+// orders, see loongarch.md *alsl<mode>3).
+instruct addI_salI_Reg_Reg_comm_immI_1_4(mRegI dst, mRegI src1, mRegI src2, immI_1_4 shift) %{
+  match(Set dst (AddI (LShiftI src2 shift) src1));
+
+  format %{ "alsl    $dst, $src2, $src1, $shift #@addI_salI_Reg_Reg_comm_immI_1_4" %}
+  ins_encode %{
+    Register  dst = $dst$$Register;
+    Register src1 = $src1$$Register;
+    Register src2 = $src2$$Register;
+    int        sh = $shift$$constant;
+    __ alsl_w(dst, src2, src1, sh - 1);
+  %}
+  ins_pipe( ialu_reg_reg );
+%}
+
+// 64 bit variants of the two rules above (x*3, x*5, x*9 in the long domain).
+instruct addL_salL_Reg_Reg_immI_1_4(mRegL dst, mRegLorI2L src1, mRegLorI2L src2, immI_1_4 shift) %{
+  match(Set dst (AddL src1 (LShiftL src2 shift)));
+
+  format %{ "alsl.d  $dst, $src2, $src1, $shift #@addL_salL_Reg_Reg_immI_1_4" %}
+  ins_encode %{
+    Register  dst = $dst$$Register;
+    Register src1 = $src1$$Register;
+    Register src2 = $src2$$Register;
+    int        sh = $shift$$constant;
+    __ alsl_d(dst, src2, src1, sh - 1);
+  %}
+  ins_pipe( ialu_reg_reg );
+%}
+
+instruct addL_salL_Reg_Reg_comm_immI_1_4(mRegL dst, mRegLorI2L src1, mRegLorI2L src2, immI_1_4 shift) %{
+  match(Set dst (AddL (LShiftL src2 shift) src1));
+
+  format %{ "alsl.d  $dst, $src2, $src1, $shift #@addL_salL_Reg_Reg_comm_immI_1_4" %}
+  ins_encode %{
+    Register  dst = $dst$$Register;
+    Register src1 = $src1$$Register;
+    Register src2 = $src2$$Register;
+    int        sh = $shift$$constant;
+    __ alsl_d(dst, src2, src1, sh - 1);
+  %}
+  ins_pipe( ialu_reg_reg );
+%}
+
 instruct addP_reg_reg(mRegP dst, mRegP src1, mRegLorI2L src2) %{
   match(Set dst (AddP src1 src2));
 
@@ -8729,6 +8777,70 @@ instruct umodI_Reg_Reg(mRegI dst, mRegIorL2I src1, mRegIorL2I src2) %{
 
   //ins_pipe( ialu_mod );
   ins_pipe( ialu_reg_reg );
+%}
+
+// Unsigned division and remainder by a constant.
+//
+// C2 only strength-reduces power-of-two divisors (share/opto/divnode.cpp:
+// unsigned_div_ideal), everything else reaches the matcher as a plain
+// UDivI/UModI with a ConI/ConL operand and would be emitted as a hardware
+// div/mod (12 cycles for 32 bit, 25 cycles for 64 bit on LA664).
+//
+// GCC expands these into a multiply-high/shift sequence (expand_divmod in
+// gcc/expmed.cc using choose_multiplier).  The full sequence *and* its
+// instruction selection are produced by the Rust planner in
+// rust/la_sched.rs, called through la_plan_udivmod; the C++ side only emits
+// the returned instructions (C2_MacroAssembler::rust_udivmod).
+instruct udivI_imm(mRegI dst, mRegIorL2I src1, immI con, mRegI tmp1, mRegI tmp2) %{
+  match(Set dst (UDivI src1 con));
+  effect(TEMP tmp1, TEMP tmp2);
+  ins_cost(30);
+  format %{ "udivI_imm  $dst, $src1, $con\t# Rust planned" %}
+  ins_encode %{
+    __ rust_udivmod(false, false, (julong)(juint)$con$$constant,
+                    $dst$$Register, $src1$$Register,
+                    $tmp1$$Register, $tmp2$$Register);
+  %}
+  ins_pipe( ialu_mult );
+%}
+
+instruct umodI_imm(mRegI dst, mRegIorL2I src1, immI con, mRegI tmp1, mRegI tmp2) %{
+  match(Set dst (UModI src1 con));
+  effect(TEMP tmp1, TEMP tmp2);
+  ins_cost(30);
+  format %{ "umodI_imm  $dst, $src1, $con\t# Rust planned" %}
+  ins_encode %{
+    __ rust_udivmod(false, true, (julong)(juint)$con$$constant,
+                    $dst$$Register, $src1$$Register,
+                    $tmp1$$Register, $tmp2$$Register);
+  %}
+  ins_pipe( ialu_mult );
+%}
+
+instruct udivL_imm(mRegL dst, mRegLorI2L src1, immL con, mRegL tmp1, mRegL tmp2) %{
+  match(Set dst (UDivL src1 con));
+  effect(TEMP tmp1, TEMP tmp2);
+  ins_cost(30);
+  format %{ "udivL_imm  $dst, $src1, $con\t# Rust planned" %}
+  ins_encode %{
+    __ rust_udivmod(true, false, (julong)$con$$constant,
+                    $dst$$Register, $src1$$Register,
+                    $tmp1$$Register, $tmp2$$Register);
+  %}
+  ins_pipe( ialu_mult );
+%}
+
+instruct umodL_imm(mRegL dst, mRegLorI2L src1, immL con, mRegL tmp1, mRegL tmp2) %{
+  match(Set dst (UModL src1 con));
+  effect(TEMP tmp1, TEMP tmp2);
+  ins_cost(30);
+  format %{ "umodL_imm  $dst, $src1, $con\t# Rust planned" %}
+  ins_encode %{
+    __ rust_udivmod(true, true, (julong)$con$$constant,
+                    $dst$$Register, $src1$$Register,
+                    $tmp1$$Register, $tmp2$$Register);
+  %}
+  ins_pipe( ialu_mult );
 %}
 
 instruct umodL_Reg_Reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
@@ -12446,7 +12558,7 @@ instruct countTrailingZerosL(mRegI dst, mRegL src) %{
 // --------------- Population Count Instructions ------------------------------
 //
 instruct popCountI(mRegI dst, mRegIorL2I src) %{
-  predicate(UsePopCountInstruction);
+  predicate(UsePopCountInstruction && UseLSX);
   match(Set dst (PopCountI src));
 
   format %{ "vinsgr2vr_w    fscratch, $src, 0\n\t"
@@ -12463,7 +12575,7 @@ instruct popCountI(mRegI dst, mRegIorL2I src) %{
 %}
 
 instruct popCountI_mem(mRegI dst, memory mem) %{
-  predicate(UsePopCountInstruction);
+  predicate(UsePopCountInstruction && UseLSX);
   match(Set dst (PopCountI (LoadI mem)));
 
   format %{ "fld_s          fscratch, $mem, 0\n\t"
@@ -12481,7 +12593,7 @@ instruct popCountI_mem(mRegI dst, memory mem) %{
 
 // Note: Long.bitCount(long) returns an int.
 instruct popCountL(mRegI dst, mRegL src) %{
-  predicate(UsePopCountInstruction);
+  predicate(UsePopCountInstruction && UseLSX);
   match(Set dst (PopCountL src));
 
   format %{ "vinsgr2vr_d    fscratch, $src, 0\n\t"
@@ -12498,7 +12610,7 @@ instruct popCountL(mRegI dst, mRegL src) %{
 %}
 
 instruct popCountL_mem(mRegI dst, memory mem) %{
-  predicate(UsePopCountInstruction);
+  predicate(UsePopCountInstruction && UseLSX);
   match(Set dst (PopCountL (LoadL mem)));
 
   format %{ "fld_d          fscratch, $mem, 0\n\t"
