@@ -4737,10 +4737,10 @@ class StubGenerator: public StubCodeGenerator {
     __ addi_d(nidx, nidx, -4);
     __ addi_d(oldArr, oldArr, -16);
     __ addi_d(newArr, newArr, -16);
-    __ xvld(FT0, oldArr, 4);
-    __ xvld(FT1, oldArr, 0);
-    __ xvsrl_w(FT0, FT0, vShiftCount);
-    __ xvsll_w(FT1, FT1, vShiftRevCount);
+    __ vld(FT0, oldArr, 4);
+    __ vld(FT1, oldArr, 0);
+    __ vsrl_w(FT0, FT0, vShiftCount);
+    __ vsll_w(FT1, FT1, vShiftRevCount);
     __ vor_v(FT0, FT0, FT1);
     __ vst(FT0, newArr, 0);
 
