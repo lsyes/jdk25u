@@ -4363,6 +4363,59 @@ void MacroAssembler::java_round_double_lasx(FloatRegister dst,
   block_comment("} java_round_double_lasx");
 }
 
+void MacroAssembler::vector_unpack_low(FloatRegister dst, FloatRegister src,
+                                       BasicType src_bt, BasicType dst_bt,
+                                       bool sign_extend, FloatRegister tmp) {
+  src_bt = (src_bt == T_FLOAT) ? T_INT : (src_bt == T_DOUBLE) ? T_LONG : src_bt;
+  dst_bt = (dst_bt == T_FLOAT) ? T_INT : (dst_bt == T_DOUBLE) ? T_LONG : dst_bt;
+  assert(UseLSX, "LSX instructions required");
+  assert(dst != tmp && src != tmp, "temporary must be distinct");
+  assert(src_bt == T_BYTE || src_bt == T_SHORT || src_bt == T_INT, "invalid source type");
+  assert(dst_bt == T_SHORT || dst_bt == T_INT || dst_bt == T_LONG, "invalid destination type");
+  assert(type2aelembytes(src_bt) < type2aelembytes(dst_bt), "must widen");
+
+  BasicType current_bt = src_bt;
+  FloatRegister current_src = src;
+  if (dst == src) {
+    // The allocator may coalesce source and destination.  Preserve the source
+    // before the first widening step because these instructions overwrite a
+    // vector register from its lowest element upwards.
+    vori_b(tmp, src, 0);
+    current_src = tmp;
+  }
+  while (current_bt != dst_bt) {
+    switch (current_bt) {
+      case T_BYTE:
+        if (sign_extend) {
+          vsllwil_h_b(dst, current_src, 0);
+        } else {
+          vsllwil_hu_bu(dst, current_src, 0);
+        }
+        current_bt = T_SHORT;
+        break;
+      case T_SHORT:
+        if (sign_extend) {
+          vsllwil_w_h(dst, current_src, 0);
+        } else {
+          vsllwil_wu_hu(dst, current_src, 0);
+        }
+        current_bt = T_INT;
+        break;
+      case T_INT:
+        if (sign_extend) {
+          vsllwil_d_w(dst, current_src, 0);
+        } else {
+          vsllwil_du_wu(dst, current_src, 0);
+        }
+        current_bt = T_LONG;
+        break;
+      default:
+        ShouldNotReachHere();
+    }
+    current_src = dst;
+  }
+}
+
 // Code for BigInteger::mulAdd intrinsic
 // out     = c_rarg0
 // in      = c_rarg1

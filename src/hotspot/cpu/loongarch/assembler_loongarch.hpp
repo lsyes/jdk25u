@@ -602,6 +602,8 @@ class Assembler : public AbstractAssembler  {
     vpickve2gr_h_op    = 0b0111001011101111110,
     vpickve2gr_hu_op   = 0b0111001011110011110,
     vreplvei_h_op      = 0b0111001011110111110,
+    vsllwil_d_w_op     = 0xe611,
+    vsllwil_du_wu_op   = 0xe619,
     vbitclri_b_op      = 0b0111001100010000001,
     vbitseti_b_op      = 0b0111001100010100001,
     vbitrevi_b_op      = 0b0111001100011000001,
@@ -631,6 +633,8 @@ class Assembler : public AbstractAssembler  {
     vpickve2gr_b_op    = 0b011100101110111110,
     vpickve2gr_bu_op   = 0b011100101111001110,
     vreplvei_b_op      = 0b011100101111011110,
+    vsllwil_h_b_op     = 0x39841,
+    vsllwil_hu_bu_op   = 0x39861,
     vbitclri_h_op      = 0b011100110001000001,
     vbitseti_h_op      = 0b011100110001010001,
     vbitrevi_h_op      = 0b011100110001100001,
@@ -638,6 +642,8 @@ class Assembler : public AbstractAssembler  {
     vsrli_h_op         = 0b011100110011000001,
     vsrai_h_op         = 0b011100110011010001,
     vsrlni_b_h_op      = 0b011100110100000001,
+    vsllwil_w_h_op     = 0x1cc21,
+    vsllwil_wu_hu_op   = 0x1cc31,
     xvrotri_h_op       = 0b011101101010000001,
     xvbitclri_h_op     = 0b011101110001000001,
     xvbitseti_h_op     = 0b011101110001010001,
@@ -881,6 +887,10 @@ class Assembler : public AbstractAssembler  {
     vabsd_h_op         = 0b01110000011000001,
     vabsd_w_op         = 0b01110000011000010,
     vabsd_d_op         = 0b01110000011000011,
+    vsigncov_b_op      = 0b01110001001011100,
+    vsigncov_h_op      = 0b01110001001011101,
+    vsigncov_w_op      = 0b01110001001011110,
+    vsigncov_d_op      = 0b01110001001011111,
     vmax_b_op          = 0b01110000011100000,
     vmax_h_op          = 0b01110000011100001,
     vmax_w_op          = 0b01110000011100010,
@@ -1084,6 +1094,10 @@ class Assembler : public AbstractAssembler  {
     xvabsd_h_op        = 0b01110100011000001,
     xvabsd_w_op        = 0b01110100011000010,
     xvabsd_d_op        = 0b01110100011000011,
+    xvsigncov_b_op     = 0b01110101001011100,
+    xvsigncov_h_op     = 0b01110101001011101,
+    xvsigncov_w_op     = 0b01110101001011110,
+    xvsigncov_d_op     = 0b01110101001011111,
     xvmax_b_op         = 0b01110100011100000,
     xvmax_h_op         = 0b01110100011100001,
     xvmax_w_op         = 0b01110100011100010,
@@ -2500,6 +2514,15 @@ public:
   void xvabsd_w(FloatRegister xd, FloatRegister xj, FloatRegister xk) { ASSERT_LASX emit_int32(insn_RRR(xvabsd_w_op, (int)xk->encoding(), (int)xj->encoding(), (int)xd->encoding())); }
   void xvabsd_d(FloatRegister xd, FloatRegister xj, FloatRegister xk) { ASSERT_LASX emit_int32(insn_RRR(xvabsd_d_op, (int)xk->encoding(), (int)xj->encoding(), (int)xd->encoding())); }
 
+  void  vsigncov_b(FloatRegister vd, FloatRegister vj, FloatRegister vk) { ASSERT_LSX  emit_int32(insn_RRR( vsigncov_b_op, (int)vk->encoding(), (int)vj->encoding(), (int)vd->encoding())); }
+  void  vsigncov_h(FloatRegister vd, FloatRegister vj, FloatRegister vk) { ASSERT_LSX  emit_int32(insn_RRR( vsigncov_h_op, (int)vk->encoding(), (int)vj->encoding(), (int)vd->encoding())); }
+  void  vsigncov_w(FloatRegister vd, FloatRegister vj, FloatRegister vk) { ASSERT_LSX  emit_int32(insn_RRR( vsigncov_w_op, (int)vk->encoding(), (int)vj->encoding(), (int)vd->encoding())); }
+  void  vsigncov_d(FloatRegister vd, FloatRegister vj, FloatRegister vk) { ASSERT_LSX  emit_int32(insn_RRR( vsigncov_d_op, (int)vk->encoding(), (int)vj->encoding(), (int)vd->encoding())); }
+  void xvsigncov_b(FloatRegister xd, FloatRegister xj, FloatRegister xk) { ASSERT_LASX emit_int32(insn_RRR(xvsigncov_b_op, (int)xk->encoding(), (int)xj->encoding(), (int)xd->encoding())); }
+  void xvsigncov_h(FloatRegister xd, FloatRegister xj, FloatRegister xk) { ASSERT_LASX emit_int32(insn_RRR(xvsigncov_h_op, (int)xk->encoding(), (int)xj->encoding(), (int)xd->encoding())); }
+  void xvsigncov_w(FloatRegister xd, FloatRegister xj, FloatRegister xk) { ASSERT_LASX emit_int32(insn_RRR(xvsigncov_w_op, (int)xk->encoding(), (int)xj->encoding(), (int)xd->encoding())); }
+  void xvsigncov_d(FloatRegister xd, FloatRegister xj, FloatRegister xk) { ASSERT_LASX emit_int32(insn_RRR(xvsigncov_d_op, (int)xk->encoding(), (int)xj->encoding(), (int)xd->encoding())); }
+
   void  vmax_b(FloatRegister vd, FloatRegister vj, FloatRegister vk) { ASSERT_LSX  emit_int32(insn_RRR( vmax_b_op, (int)vk->encoding(), (int)vj->encoding(), (int)vd->encoding())); }
   void  vmax_h(FloatRegister vd, FloatRegister vj, FloatRegister vk) { ASSERT_LSX  emit_int32(insn_RRR( vmax_h_op, (int)vk->encoding(), (int)vj->encoding(), (int)vd->encoding())); }
   void  vmax_w(FloatRegister vd, FloatRegister vj, FloatRegister vk) { ASSERT_LSX  emit_int32(insn_RRR( vmax_w_op, (int)vk->encoding(), (int)vj->encoding(), (int)vd->encoding())); }
@@ -2659,6 +2682,12 @@ public:
   void  vslli_h(FloatRegister vd, FloatRegister vj, int ui4) { ASSERT_LSX  emit_int32(insn_I4RR( vslli_h_op, ui4, (int)vj->encoding(), (int)vd->encoding())); }
   void  vslli_w(FloatRegister vd, FloatRegister vj, int ui5) { ASSERT_LSX  emit_int32(insn_I5RR( vslli_w_op, ui5, (int)vj->encoding(), (int)vd->encoding())); }
   void  vslli_d(FloatRegister vd, FloatRegister vj, int ui6) { ASSERT_LSX  emit_int32(insn_I6RR( vslli_d_op, ui6, (int)vj->encoding(), (int)vd->encoding())); }
+  void  vsllwil_h_b(FloatRegister vd, FloatRegister vj, int ui3) { ASSERT_LSX emit_int32(insn_I3RR(vsllwil_h_b_op, ui3, (int)vj->encoding(), (int)vd->encoding())); }
+  void  vsllwil_w_h(FloatRegister vd, FloatRegister vj, int ui4) { ASSERT_LSX emit_int32(insn_I4RR(vsllwil_w_h_op, ui4, (int)vj->encoding(), (int)vd->encoding())); }
+  void  vsllwil_d_w(FloatRegister vd, FloatRegister vj, int ui5) { ASSERT_LSX emit_int32(insn_I5RR(vsllwil_d_w_op, ui5, (int)vj->encoding(), (int)vd->encoding())); }
+  void  vsllwil_hu_bu(FloatRegister vd, FloatRegister vj, int ui3) { ASSERT_LSX emit_int32(insn_I3RR(vsllwil_hu_bu_op, ui3, (int)vj->encoding(), (int)vd->encoding())); }
+  void  vsllwil_wu_hu(FloatRegister vd, FloatRegister vj, int ui4) { ASSERT_LSX emit_int32(insn_I4RR(vsllwil_wu_hu_op, ui4, (int)vj->encoding(), (int)vd->encoding())); }
+  void  vsllwil_du_wu(FloatRegister vd, FloatRegister vj, int ui5) { ASSERT_LSX emit_int32(insn_I5RR(vsllwil_du_wu_op, ui5, (int)vj->encoding(), (int)vd->encoding())); }
   void xvslli_b(FloatRegister xd, FloatRegister xj, int ui3) { ASSERT_LASX emit_int32(insn_I3RR(xvslli_b_op, ui3, (int)xj->encoding(), (int)xd->encoding())); }
   void xvslli_h(FloatRegister xd, FloatRegister xj, int ui4) { ASSERT_LASX emit_int32(insn_I4RR(xvslli_h_op, ui4, (int)xj->encoding(), (int)xd->encoding())); }
   void xvslli_w(FloatRegister xd, FloatRegister xj, int ui5) { ASSERT_LASX emit_int32(insn_I5RR(xvslli_w_op, ui5, (int)xj->encoding(), (int)xd->encoding())); }

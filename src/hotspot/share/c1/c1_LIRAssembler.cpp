@@ -227,6 +227,11 @@ void LIR_Assembler::emit_code(BlockList* hir) {
     CHECK_BAILOUT();
   }
 
+#ifdef LOONGARCH
+  finalize_code();
+  CHECK_BAILOUT();
+#endif
+
   flush_debug_info(code_offset());
 
   DEBUG_ONLY(check_no_unbound_labels());

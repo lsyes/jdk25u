@@ -762,6 +762,19 @@ definitions %{
   // Memory refs are twice as expensive as run-of-the-mill.
   int_def MEMORY_REF_COST   (    200, DEFAULT_COST * 2);
 
+  // GCC loongarch_rtx_cost_data() uses COSTS_N_INSNS(n) with
+  // COSTS_N_INSNS(1) == 4.  C2's DEFAULT_COST represents one scalar or
+  // vector statement, so GCC costs are scaled by DEFAULT_COST / 4.
+  int_def FP_ADD_COST       (    500, DEFAULT_COST * 5);
+  int_def FP_MULT_COST      (    500, DEFAULT_COST * 5);
+  int_def FP_DIV_COST       (    800, DEFAULT_COST * 8);
+  int_def INT_MULT_COST     (    400, DEFAULT_COST * 4);
+  int_def INT_DIV_COST      (    500, DEFAULT_COST * 5);
+
+  // loongarch_builtin_vectorization_cost(): vector/unaligned memory
+  // operations cost two scalar/vector statements.
+  int_def VECTOR_MEMORY_COST (   200, DEFAULT_COST * 2);
+
   // Branches are even more expensive.
   int_def BRANCH_COST       (    300, DEFAULT_COST * 3);
   // we use jr instruction to construct call, so more expensive
@@ -1032,17 +1045,24 @@ bool Matcher::match_rule_supported_vector(int opcode, int vlen, BasicType bt) {
     case Op_VectorLoadShuffle:
       return (UseLASX && vlen >= 4);
     case Op_VectorUCastB2X:
+      return UseLSX;
     case Op_VectorUCastS2X:
-    case Op_VectorUCastI2X:
+      return UseLSX && (bt == T_INT || bt == T_LONG);
     case Op_VectorCastB2X:
+      return UseLSX;
     case Op_VectorCastS2X:
+      return UseLSX;
     case Op_VectorCastI2X:
+      return UseLASX;
+    case Op_VectorUCastI2X:
+      return UseLSX && bt == T_LONG;
     case Op_VectorCastL2X:
     case Op_VectorCastF2X:
     case Op_VectorCastD2X:
+      return UseLASX;
     case Op_VectorLoadMask:
     case Op_VectorMaskCast:
-      return UseLASX;
+      return UseLSX;
     case Op_VectorTest:
       return (vlen * type2aelembytes(bt) >= 16);
     case Op_FmaVF:
@@ -8751,7 +8771,7 @@ instruct subL_Reg_Reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
 // Integer MOD with Register
 instruct modI_Reg_Reg(mRegI dst, mRegIorL2I src1, mRegIorL2I src2) %{
   match(Set dst (ModI src1 src2));
-  ins_cost(300);
+  ins_cost(INT_DIV_COST);
   format %{ "modi   $dst, $src1, $src2 @ modI_Reg_Reg" %}
   ins_encode %{
     Register  dst = $dst$$Register;
@@ -8766,6 +8786,7 @@ instruct modI_Reg_Reg(mRegI dst, mRegIorL2I src1, mRegIorL2I src2) %{
 
 instruct umodI_Reg_Reg(mRegI dst, mRegIorL2I src1, mRegIorL2I src2) %{
   match(Set dst (UModI src1 src2));
+  ins_cost(INT_DIV_COST);
   format %{ "mod.wu   $dst, $src1, $src2 @ umodI_Reg_Reg" %}
   ins_encode %{
     Register  dst = $dst$$Register;
@@ -8792,7 +8813,7 @@ instruct umodI_Reg_Reg(mRegI dst, mRegIorL2I src1, mRegIorL2I src2) %{
 instruct udivI_imm(mRegI dst, mRegIorL2I src1, immI con, mRegI tmp1, mRegI tmp2) %{
   match(Set dst (UDivI src1 con));
   effect(TEMP tmp1, TEMP tmp2);
-  ins_cost(30);
+  ins_cost(INT_MULT_COST + DEFAULT_COST);
   format %{ "udivI_imm  $dst, $src1, $con" %}
   ins_encode %{
     __ udivmod_imm(false, false, (julong)(juint)$con$$constant,
@@ -8805,7 +8826,7 @@ instruct udivI_imm(mRegI dst, mRegIorL2I src1, immI con, mRegI tmp1, mRegI tmp2)
 instruct umodI_imm(mRegI dst, mRegIorL2I src1, immI con, mRegI tmp1, mRegI tmp2) %{
   match(Set dst (UModI src1 con));
   effect(TEMP tmp1, TEMP tmp2);
-  ins_cost(30);
+  ins_cost(INT_MULT_COST + 2 * DEFAULT_COST);
   format %{ "umodI_imm  $dst, $src1, $con" %}
   ins_encode %{
     __ udivmod_imm(false, true, (julong)(juint)$con$$constant,
@@ -8818,7 +8839,7 @@ instruct umodI_imm(mRegI dst, mRegIorL2I src1, immI con, mRegI tmp1, mRegI tmp2)
 instruct udivL_imm(mRegL dst, mRegLorI2L src1, immL con, mRegL tmp1, mRegL tmp2) %{
   match(Set dst (UDivL src1 con));
   effect(TEMP tmp1, TEMP tmp2);
-  ins_cost(30);
+  ins_cost(INT_MULT_COST + DEFAULT_COST);
   format %{ "udivL_imm  $dst, $src1, $con" %}
   ins_encode %{
     __ udivmod_imm(true, false, (julong)$con$$constant,
@@ -8831,7 +8852,7 @@ instruct udivL_imm(mRegL dst, mRegLorI2L src1, immL con, mRegL tmp1, mRegL tmp2)
 instruct umodL_imm(mRegL dst, mRegLorI2L src1, immL con, mRegL tmp1, mRegL tmp2) %{
   match(Set dst (UModL src1 con));
   effect(TEMP tmp1, TEMP tmp2);
-  ins_cost(30);
+  ins_cost(INT_MULT_COST + 2 * DEFAULT_COST);
   format %{ "umodL_imm  $dst, $src1, $con" %}
   ins_encode %{
     __ udivmod_imm(true, true, (julong)$con$$constant,
@@ -8843,6 +8864,7 @@ instruct umodL_imm(mRegL dst, mRegLorI2L src1, immL con, mRegL tmp1, mRegL tmp2)
 
 instruct umodL_Reg_Reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
   match(Set dst (UModL src1 src2));
+  ins_cost(INT_DIV_COST);
   format %{ "mod.du   $dst, $src1, $src2 @ umodL_Reg_Reg" %}
   ins_encode %{
     Register  dst = $dst$$Register;
@@ -8858,6 +8880,7 @@ instruct umodL_Reg_Reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
 
 instruct modL_reg_reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
   match(Set dst (ModL src1 src2));
+  ins_cost(INT_DIV_COST);
   format %{ "modL  $dst, $src1, $src2 @modL_reg_reg" %}
 
   ins_encode %{
@@ -8873,7 +8896,7 @@ instruct modL_reg_reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
 instruct mulI_Reg_Reg(mRegI dst, mRegI src1, mRegI src2) %{
   match(Set dst (MulI src1 src2));
 
-  ins_cost(300);
+  ins_cost(INT_MULT_COST);
   format %{ "mul   $dst, $src1, $src2 @ mulI_Reg_Reg" %}
   ins_encode %{
      Register src1 = $src1$$Register;
@@ -8896,7 +8919,7 @@ instruct muladdS2I_Reg_Reg(mRegI dst, mRegIorL2I src1, mRegIorL2I src2,
                            mRegIorL2I src3, mRegIorL2I src4) %{
   match(Set dst (MulAddS2I (Binary src1 src2) (Binary src3 src4)));
 
-  ins_cost(300);
+  ins_cost(2 * INT_MULT_COST + DEFAULT_COST);
   format %{ "mul   AT, $src1, $src2\n\t"
             "mul   $dst, $src3, $src4\n\t"
             "add.w $dst, $dst, AT\t# @muladdS2I_Reg_Reg" %}
@@ -8911,7 +8934,7 @@ instruct muladdS2I_Reg_Reg(mRegI dst, mRegIorL2I src1, mRegIorL2I src2,
 instruct divI_Reg_Reg(mRegI dst, mRegI src1, mRegI src2) %{
   match(Set dst (DivI src1 src2));
 
-  ins_cost(300);
+  ins_cost(INT_DIV_COST);
   format %{ "div   $dst, $src1, $src2 @ divI_Reg_Reg" %}
   ins_encode %{
      Register src1 = $src1$$Register;
@@ -8935,6 +8958,7 @@ instruct divmodI_Reg_Reg(mT1RegI div, mT2RegI mod, mRegI src1, mRegI src2) %{
   match(DivModI src1 src2);
   effect(TEMP_DEF div, TEMP_DEF mod);
 
+  ins_cost(INT_DIV_COST + INT_MULT_COST + DEFAULT_COST);
   format %{ "divmodI  $div..$mod, $src1, $src2 @ divmodI_Reg_Reg" %}
 
   ins_encode %{
@@ -8955,6 +8979,7 @@ instruct udivmodI_Reg_Reg(mT1RegI div, mT2RegI mod, mRegI src1, mRegI src2) %{
   match(UDivModI src1 src2);
   effect(TEMP_DEF div, TEMP_DEF mod);
 
+  ins_cost(INT_DIV_COST + INT_MULT_COST + DEFAULT_COST);
   format %{ "udivmodI  $div..$mod, $src1, $src2 @ udivmodI_Reg_Reg" %}
 
   ins_encode %{
@@ -8975,6 +9000,7 @@ instruct divmodL_Reg_Reg(t1RegL div, t2RegL mod, mRegL src1, mRegL src2) %{
   match(DivModL src1 src2);
   effect(TEMP_DEF div, TEMP_DEF mod);
 
+  ins_cost(INT_DIV_COST + INT_MULT_COST + DEFAULT_COST);
   format %{ "divmodL  $div..$mod, $src1, $src2 @ divmodL_Reg_Reg" %}
 
   ins_encode %{
@@ -8995,6 +9021,7 @@ instruct udivmodL_Reg_Reg(t1RegL div, t2RegL mod, mRegL src1, mRegL src2) %{
   match(UDivModL src1 src2);
   effect(TEMP_DEF div, TEMP_DEF mod);
 
+  ins_cost(INT_DIV_COST + INT_MULT_COST + DEFAULT_COST);
   format %{ "udivmodL $div..$mod, $src1, $src2 @ udivmodL_Reg_Reg" %}
 
   ins_encode %{
@@ -9016,6 +9043,7 @@ instruct udivmodL_Reg_Reg(t1RegL div, t2RegL mod, mRegL src1, mRegL src2) %{
 instruct udivI_Reg_Reg(mRegI dst, mRegI src1, mRegI src2) %{
   match(Set dst (UDivI src1 src2));
 
+  ins_cost(INT_DIV_COST);
   format %{ "udivI   $dst, $src1, $src2 @ udivI_Reg_Reg" %}
   ins_encode %{
      Register src1 = $src1$$Register;
@@ -9031,7 +9059,7 @@ instruct udivI_Reg_Reg(mRegI dst, mRegI src1, mRegI src2) %{
 instruct divF_Reg_Reg(regF dst, regF src1, regF src2) %{
   match(Set dst (DivF src1 src2));
 
-  ins_cost(300);
+  ins_cost(FP_DIV_COST);
   format %{ "divF   $dst, $src1, $src2 @ divF_Reg_Reg" %}
   ins_encode %{
      FloatRegister src1 = $src1$$FloatRegister;
@@ -9046,7 +9074,7 @@ instruct divF_Reg_Reg(regF dst, regF src1, regF src2) %{
 instruct divD_Reg_Reg(regD dst, regD src1, regD src2) %{
   match(Set dst (DivD src1 src2));
 
-  ins_cost(300);
+  ins_cost(FP_DIV_COST);
   format %{ "divD   $dst, $src1, $src2 @ divD_Reg_Reg" %}
   ins_encode %{
      FloatRegister src1 = $src1$$FloatRegister;
@@ -9060,6 +9088,7 @@ instruct divD_Reg_Reg(regD dst, regD src1, regD src2) %{
 
 instruct mulL_reg_reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
   match(Set dst (MulL src1 src2));
+  ins_cost(INT_MULT_COST);
   format %{ "mulL  $dst, $src1, $src2 @mulL_reg_reg" %}
   ins_encode %{
     Register dst = as_Register($dst$$reg);
@@ -9073,6 +9102,7 @@ instruct mulL_reg_reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
 
 instruct mulHiL_reg_reg(mRegL dst, mRegL src1, mRegL src2) %{
   match(Set dst (MulHiL src1 src2));
+  ins_cost(INT_MULT_COST);
   format %{ "mulHiL  $dst, $src1, $src2 @mulL_reg_reg" %}
   ins_encode %{
     Register dst = as_Register($dst$$reg);
@@ -9128,6 +9158,7 @@ instruct overflowMulL_reg_branch(cmpOp cmp, mRegLorI2L op1, mRegLorI2L op2,
 
 instruct umulHiL_reg_reg(mRegL dst, mRegL src1, mRegL src2) %{
   match(Set dst (UMulHiL src1 src2));
+  ins_cost(INT_MULT_COST);
   format %{ "mulh.du  $dst, $src1, $src2 @umulHiL_reg_reg" %}
 
   ins_encode %{
@@ -9138,6 +9169,7 @@ instruct umulHiL_reg_reg(mRegL dst, mRegL src1, mRegL src2) %{
 
 instruct divL_reg_reg(mRegL dst, mRegL src1, mRegL src2) %{
   match(Set dst (DivL src1 src2));
+  ins_cost(INT_DIV_COST);
   format %{ "divL  $dst, $src1, $src2 @divL_reg_reg" %}
 
   ins_encode %{
@@ -9152,6 +9184,7 @@ instruct divL_reg_reg(mRegL dst, mRegL src1, mRegL src2) %{
 
 instruct udivL_reg_reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
   match(Set dst (UDivL src1 src2));
+  ins_cost(INT_DIV_COST);
   format %{ "udivL  $dst, $src1, $src2 @udivL_reg_reg" %}
 
   ins_encode %{
@@ -9166,6 +9199,7 @@ instruct udivL_reg_reg(mRegL dst, mRegLorI2L src1, mRegLorI2L src2) %{
 
 instruct addF_reg_reg(regF dst, regF src1, regF src2) %{
   match(Set dst (AddF src1 src2));
+  ins_cost(FP_ADD_COST);
   format %{ "AddF  $dst, $src1, $src2 @addF_reg_reg" %}
   ins_encode %{
     FloatRegister src1 = as_FloatRegister($src1$$reg);
@@ -9179,6 +9213,7 @@ instruct addF_reg_reg(regF dst, regF src1, regF src2) %{
 
 instruct subF_reg_reg(regF dst, regF src1, regF src2) %{
   match(Set dst (SubF src1 src2));
+  ins_cost(FP_ADD_COST);
   format %{ "SubF  $dst, $src1, $src2 @subF_reg_reg" %}
   ins_encode %{
     FloatRegister src1 = as_FloatRegister($src1$$reg);
@@ -9191,6 +9226,7 @@ instruct subF_reg_reg(regF dst, regF src1, regF src2) %{
 %}
 instruct addD_reg_reg(regD dst, regD src1, regD src2) %{
   match(Set dst (AddD src1 src2));
+  ins_cost(FP_ADD_COST);
   format %{ "AddD  $dst, $src1, $src2 @addD_reg_reg" %}
   ins_encode %{
     FloatRegister src1 = as_FloatRegister($src1$$reg);
@@ -9204,6 +9240,7 @@ instruct addD_reg_reg(regD dst, regD src1, regD src2) %{
 
 instruct subD_reg_reg(regD dst, regD src1, regD src2) %{
   match(Set dst (SubD src1 src2));
+  ins_cost(FP_ADD_COST);
   format %{ "SubD  $dst, $src1, $src2 @subD_reg_reg" %}
   ins_encode %{
     FloatRegister src1 = as_FloatRegister($src1$$reg);
@@ -9217,6 +9254,7 @@ instruct subD_reg_reg(regD dst, regD src1, regD src2) %{
 
 instruct negF_reg(regF dst, regF src) %{
   match(Set dst (NegF src));
+  ins_cost(FP_ADD_COST);
   format %{ "negF  $dst, $src @negF_reg" %}
   ins_encode %{
     FloatRegister src = as_FloatRegister($src$$reg);
@@ -9229,6 +9267,7 @@ instruct negF_reg(regF dst, regF src) %{
 
 instruct negD_reg(regD dst, regD src) %{
   match(Set dst (NegD src));
+  ins_cost(FP_ADD_COST);
   format %{ "negD  $dst, $src @negD_reg" %}
   ins_encode %{
     FloatRegister src = as_FloatRegister($src$$reg);
@@ -9242,6 +9281,7 @@ instruct negD_reg(regD dst, regD src) %{
 
 instruct mulF_reg_reg(regF dst, regF src1, regF src2) %{
   match(Set dst (MulF src1 src2));
+  ins_cost(FP_MULT_COST);
   format %{ "MULF  $dst, $src1, $src2 @mulF_reg_reg" %}
   ins_encode %{
     FloatRegister src1 = $src1$$FloatRegister;
@@ -9256,6 +9296,7 @@ instruct mulF_reg_reg(regF dst, regF src1, regF src2) %{
 // Mul two double precision floating point number
 instruct mulD_reg_reg(regD dst, regD src1, regD src2) %{
   match(Set dst (MulD src1 src2));
+  ins_cost(FP_MULT_COST);
   format %{ "MULD  $dst, $src1, $src2 @mulD_reg_reg" %}
   ins_encode %{
     FloatRegister src1 = $src1$$FloatRegister;
@@ -9269,7 +9310,7 @@ instruct mulD_reg_reg(regD dst, regD src1, regD src2) %{
 
 instruct absF_reg(regF dst, regF src) %{
   match(Set dst (AbsF src));
-  ins_cost(100);
+  ins_cost(FP_ADD_COST);
   format %{ "absF  $dst, $src @absF_reg" %}
   ins_encode %{
     FloatRegister src = as_FloatRegister($src$$reg);
@@ -9286,7 +9327,7 @@ instruct absF_reg(regF dst, regF src) %{
 
 instruct absD_reg(regD dst, regD src) %{
   match(Set dst (AbsD src));
-  ins_cost(100);
+  ins_cost(FP_ADD_COST);
   format %{ "absD  $dst, $src @absD_reg" %}
   ins_encode %{
     FloatRegister src = as_FloatRegister($src$$reg);
@@ -9299,7 +9340,7 @@ instruct absD_reg(regD dst, regD src) %{
 
 instruct sqrtD_reg(regD dst, regD src) %{
   match(Set dst (SqrtD src));
-  ins_cost(100);
+  ins_cost(FP_DIV_COST);
   format %{ "SqrtD  $dst, $src @sqrtD_reg" %}
   ins_encode %{
     FloatRegister src = as_FloatRegister($src$$reg);
@@ -9312,7 +9353,7 @@ instruct sqrtD_reg(regD dst, regD src) %{
 
 instruct sqrtF_reg(regF dst, regF src) %{
   match(Set dst (SqrtF src));
-  ins_cost(100);
+  ins_cost(FP_DIV_COST);
   format %{ "SqrtF  $dst, $src @sqrtF_reg" %}
   ins_encode %{
     FloatRegister src = as_FloatRegister($src$$reg);
@@ -9327,6 +9368,7 @@ instruct sqrtF_reg(regF dst, regF src) %{
 instruct maddF_reg_reg(regF dst, regF src1, regF src2, regF src3) %{
   match(Set dst (FmaF src3 (Binary src1 src2)));
   format %{ "fmadd_s  $dst, $src1, $src2, $src3" %}
+  ins_cost(FP_MULT_COST);
   ins_encode %{
     assert(UseFMA, "Needs FMA instructions support.");
     __ fmadd_s(as_FloatRegister($dst$$reg), as_FloatRegister($src1$$reg),
@@ -9339,6 +9381,7 @@ instruct maddF_reg_reg(regF dst, regF src1, regF src2, regF src3) %{
 instruct maddD_reg_reg(regD dst, regD src1, regD src2, regD src3) %{
   match(Set dst (FmaD src3 (Binary src1 src2)));
   format %{ "fmadd_d  $dst, $src1, $src2, $src3" %}
+  ins_cost(FP_MULT_COST);
   ins_encode %{
     assert(UseFMA, "Needs FMA instructions support.");
     __ fmadd_d(as_FloatRegister($dst$$reg), as_FloatRegister($src1$$reg),
@@ -9351,6 +9394,7 @@ instruct maddD_reg_reg(regD dst, regD src1, regD src2, regD src3) %{
 instruct msubF_reg_reg(regF dst, regF src1, regF src2, regF src3, immF_0 zero) %{
   match(Set dst (FmaF (NegF src3) (Binary src1 src2)));
   format %{ "fmsub_s $dst, $src1, $src2, $src3" %}
+  ins_cost(FP_MULT_COST);
   ins_encode %{
     assert(UseFMA, "Needs FMA instructions support.");
     __ fmsub_s(as_FloatRegister($dst$$reg), as_FloatRegister($src1$$reg),
@@ -9363,6 +9407,7 @@ instruct msubF_reg_reg(regF dst, regF src1, regF src2, regF src3, immF_0 zero) %
 instruct msubD_reg_reg(regD dst, regD src1, regD src2, regD src3, immD_0 zero) %{
   match(Set dst (FmaD (NegD src3) (Binary src1 src2)));
   format %{ "fmsub_d  $dst, $src1, $src2, $src3" %}
+  ins_cost(FP_MULT_COST);
   ins_encode %{
     assert(UseFMA, "Needs FMA instructions support.");
     __ fmsub_d(as_FloatRegister($dst$$reg), as_FloatRegister($src1$$reg),
@@ -9376,6 +9421,7 @@ instruct msubD_reg_reg(regD dst, regD src1, regD src2, regD src3, immD_0 zero) %
 instruct mnaddF_reg_reg(regF dst, regF src1, regF src2, regF src3, immF_0 zero) %{
   match(Set dst (FmaF (NegF src3) (Binary src1 (NegF src2))));
   format %{ "fnmadds  $dst, $src1, $src2, $src3" %}
+  ins_cost(FP_MULT_COST);
   ins_encode %{
     assert(UseFMA, "Needs FMA instructions support.");
     __ fnmadd_s(as_FloatRegister($dst$$reg), as_FloatRegister($src1$$reg),
@@ -9389,6 +9435,7 @@ instruct mnaddF_reg_reg(regF dst, regF src1, regF src2, regF src3, immF_0 zero) 
 instruct mnaddD_reg_reg(regD dst, regD src1, regD src2, regD src3, immD_0 zero) %{
   match(Set dst (FmaD (NegD src3) (Binary src1 (NegD src2))));
   format %{ "fnmaddd   $dst, $src1, $src2, $src3" %}
+  ins_cost(FP_MULT_COST);
   ins_encode %{
     assert(UseFMA, "Needs FMA instructions support.");
     __ fnmadd_d(as_FloatRegister($dst$$reg), as_FloatRegister($src1$$reg),
@@ -9402,6 +9449,7 @@ instruct mnaddD_reg_reg(regD dst, regD src1, regD src2, regD src3, immD_0 zero) 
 instruct mnsubF_reg_reg(regF dst, regF src1, regF src2, regF src3) %{
   match(Set dst (FmaF src3 (Binary src1 (NegF src2))));
   format %{ "fnmsubs  $dst, $src1, $src2, $src3" %}
+  ins_cost(FP_MULT_COST);
   ins_encode %{
     assert(UseFMA, "Needs FMA instructions support.");
     __ fnmsub_s(as_FloatRegister($dst$$reg), as_FloatRegister($src1$$reg),
@@ -9415,6 +9463,7 @@ instruct mnsubF_reg_reg(regF dst, regF src1, regF src2, regF src3) %{
 instruct mnsubD_reg_reg(regD dst, regD src1, regD src2, regD src3) %{
   match(Set dst (FmaD src3 (Binary src1 (NegD src2))));
   format %{ "fnmsubd   $dst, $src1, $src2, $src3" %}
+  ins_cost(FP_MULT_COST);
   ins_encode %{
     assert(UseFMA, "Needs FMA instructions support.");
     __ fnmsub_d(as_FloatRegister($dst$$reg), as_FloatRegister($src1$$reg),
@@ -12631,6 +12680,7 @@ instruct popCountL_mem(mRegI dst, memory mem) %{
 instruct loadV(vReg dst, memory mem) %{
   match(Set dst (LoadVector mem));
   format %{ "(x)vload    $dst, $mem\t# @loadV" %}
+  ins_cost(VECTOR_MEMORY_COST);
   ins_encode %{
     switch (Matcher::vector_length_in_bytes(this)) {
       case  4: __ loadstore_enc($dst$$FloatRegister, $mem$$base, $mem$$index, $mem$$scale, $mem$$disp, C2_MacroAssembler::LOAD_FLOAT);   break;
@@ -12649,6 +12699,7 @@ instruct loadV(vReg dst, memory mem) %{
 instruct storeV(memory mem, vReg src) %{
   match(Set mem (StoreVector mem src));
   format %{ "(x)vstore    $src, $mem\t# @storeV" %}
+  ins_cost(VECTOR_MEMORY_COST);
   ins_encode %{
     switch (Matcher::vector_length_in_bytes(this, $src)) {
       case  4: __ loadstore_enc($src$$FloatRegister, $mem$$base, $mem$$index, $mem$$scale, $mem$$disp, C2_MacroAssembler::STORE_FLOAT);   break;
@@ -12707,7 +12758,6 @@ instruct replVF(vReg dst, regF src) %{
   match(Set dst (Replicate src));
   format %{ "(x)vreplve0.w    $dst, $src\t# @replVF" %}
   ins_encode %{
-    __ vreplvei_w($dst$$FloatRegister, $src$$FloatRegister, 0);
     switch (Matcher::vector_length(this)) {
       case 2:
       case 4: __  vreplvei_w($dst$$FloatRegister, $src$$FloatRegister, 0); break;
@@ -13140,26 +13190,22 @@ instruct absV(vReg dst, vReg src) %{
   format %{ "(x)vabs    $dst, $src\t# @absV" %}
   ins_encode %{
     if (Matcher::vector_length_in_bytes(this) > 16) {
-      if (!is_floating_point_type(Matcher::vector_element_basic_type(this)))
-        __ xvxor_v(fscratch, fscratch, fscratch);
       switch(Matcher::vector_element_basic_type(this)) {
-        case T_BYTE  : __ xvabsd_b($dst$$FloatRegister, $src$$FloatRegister, fscratch); break;
-        case T_SHORT : __ xvabsd_h($dst$$FloatRegister, $src$$FloatRegister, fscratch); break;
-        case T_INT   : __ xvabsd_w($dst$$FloatRegister, $src$$FloatRegister, fscratch); break;
-        case T_LONG  : __ xvabsd_d($dst$$FloatRegister, $src$$FloatRegister, fscratch); break;
+        case T_BYTE  : __ xvsigncov_b($dst$$FloatRegister, $src$$FloatRegister, $src$$FloatRegister); break;
+        case T_SHORT : __ xvsigncov_h($dst$$FloatRegister, $src$$FloatRegister, $src$$FloatRegister); break;
+        case T_INT   : __ xvsigncov_w($dst$$FloatRegister, $src$$FloatRegister, $src$$FloatRegister); break;
+        case T_LONG  : __ xvsigncov_d($dst$$FloatRegister, $src$$FloatRegister, $src$$FloatRegister); break;
         case T_FLOAT : __ xvbitclri_w($dst$$FloatRegister, $src$$FloatRegister, 0x1f);  break;
         case T_DOUBLE: __ xvbitclri_d($dst$$FloatRegister, $src$$FloatRegister, 0x3f);  break;
         default:
           ShouldNotReachHere();
       }
     } else {
-      if (!is_floating_point_type(Matcher::vector_element_basic_type(this)))
-        __ vxor_v(fscratch, fscratch, fscratch);
       switch(Matcher::vector_element_basic_type(this)) {
-        case T_BYTE  : __ vabsd_b($dst$$FloatRegister, $src$$FloatRegister, fscratch); break;
-        case T_SHORT : __ vabsd_h($dst$$FloatRegister, $src$$FloatRegister, fscratch); break;
-        case T_INT   : __ vabsd_w($dst$$FloatRegister, $src$$FloatRegister, fscratch); break;
-        case T_LONG  : __ vabsd_d($dst$$FloatRegister, $src$$FloatRegister, fscratch); break;
+        case T_BYTE  : __ vsigncov_b($dst$$FloatRegister, $src$$FloatRegister, $src$$FloatRegister); break;
+        case T_SHORT : __ vsigncov_h($dst$$FloatRegister, $src$$FloatRegister, $src$$FloatRegister); break;
+        case T_INT   : __ vsigncov_w($dst$$FloatRegister, $src$$FloatRegister, $src$$FloatRegister); break;
+        case T_LONG  : __ vsigncov_d($dst$$FloatRegister, $src$$FloatRegister, $src$$FloatRegister); break;
         case T_FLOAT : __ vbitclri_w($dst$$FloatRegister, $src$$FloatRegister, 0x1f);  break;
         case T_DOUBLE: __ vbitclri_d($dst$$FloatRegister, $src$$FloatRegister, 0x3f);  break;
         default:
@@ -14419,12 +14465,18 @@ instruct cvtVUB(vReg dst, vReg src) %{
   match(Set dst (VectorUCastB2X src));
   format %{ "(x)vconvert    $dst, $src\t# @cvtVUB" %}
   ins_encode %{
-    switch (Matcher::vector_element_basic_type(this)) {
-      case T_SHORT : __ vext2xv_hu_bu($dst$$FloatRegister, $src$$FloatRegister); break;
-      case T_INT   : __ vext2xv_wu_bu($dst$$FloatRegister, $src$$FloatRegister); break;
-      case T_LONG  : __ vext2xv_du_bu($dst$$FloatRegister, $src$$FloatRegister); break;
-      default:
-        ShouldNotReachHere();
+    BasicType dst_bt = Matcher::vector_element_basic_type(this);
+    if (Matcher::vector_length_in_bytes(this) <= 16) {
+      __ vector_unpack_low($dst$$FloatRegister, $src$$FloatRegister,
+                           T_BYTE, dst_bt, false, fscratch);
+    } else {
+      switch (dst_bt) {
+        case T_SHORT : __ vext2xv_hu_bu($dst$$FloatRegister, $src$$FloatRegister); break;
+        case T_INT   : __ vext2xv_wu_bu($dst$$FloatRegister, $src$$FloatRegister); break;
+        case T_LONG  : __ vext2xv_du_bu($dst$$FloatRegister, $src$$FloatRegister); break;
+        default:
+          ShouldNotReachHere();
+      }
     }
   %}
   ins_pipe( pipe_slow );
@@ -14436,11 +14488,17 @@ instruct cvtVUS(vReg dst, vReg src) %{
   match(Set dst (VectorUCastS2X src));
   format %{ "(x)vconvert    $dst, $src\t# @cvtVUS" %}
   ins_encode %{
-    switch (Matcher::vector_element_basic_type(this)) {
-      case T_INT   : __ vext2xv_wu_hu($dst$$FloatRegister, $src$$FloatRegister); break;
-      case T_LONG  : __ vext2xv_du_hu($dst$$FloatRegister, $src$$FloatRegister); break;
-      default:
-        ShouldNotReachHere();
+    BasicType dst_bt = Matcher::vector_element_basic_type(this);
+    if (Matcher::vector_length_in_bytes(this) <= 16) {
+      __ vector_unpack_low($dst$$FloatRegister, $src$$FloatRegister,
+                           T_SHORT, dst_bt, false, fscratch);
+    } else {
+      switch (dst_bt) {
+        case T_INT   : __ vext2xv_wu_hu($dst$$FloatRegister, $src$$FloatRegister); break;
+        case T_LONG  : __ vext2xv_du_hu($dst$$FloatRegister, $src$$FloatRegister); break;
+        default:
+          ShouldNotReachHere();
+      }
     }
   %}
   ins_pipe( pipe_slow );
@@ -14452,10 +14510,15 @@ instruct cvtVUI(vReg dst, vReg src) %{
   match(Set dst (VectorUCastI2X src));
   format %{ "(x)vconvert    $dst, $src\t# @cvtVUI" %}
   ins_encode %{
-    switch (Matcher::vector_element_basic_type(this)) {
-      case T_LONG  : __ vext2xv_du_wu($dst$$FloatRegister, $src$$FloatRegister); break;
-      default:
-        ShouldNotReachHere();
+    if (Matcher::vector_length_in_bytes(this) <= 16) {
+      __ vector_unpack_low($dst$$FloatRegister, $src$$FloatRegister,
+                           T_INT, T_LONG, false, fscratch);
+    } else {
+      switch (Matcher::vector_element_basic_type(this)) {
+        case T_LONG  : __ vext2xv_du_wu($dst$$FloatRegister, $src$$FloatRegister); break;
+        default:
+          ShouldNotReachHere();
+      }
     }
   %}
   ins_pipe( pipe_slow );
@@ -14467,19 +14530,29 @@ instruct cvtVB(vReg dst, vReg src) %{
   match(Set dst (VectorCastB2X src));
   format %{ "(x)vconvert    $dst, $src\t# @cvtVB" %}
   ins_encode %{
-    switch (Matcher::vector_element_basic_type(this)) {
-      case T_SHORT : __ vext2xv_h_b($dst$$FloatRegister, $src$$FloatRegister); break;
-      case T_INT   : __ vext2xv_w_b($dst$$FloatRegister, $src$$FloatRegister); break;
-      case T_LONG  : __ vext2xv_d_b($dst$$FloatRegister, $src$$FloatRegister); break;
-      case T_FLOAT : __ vext2xv_w_b($dst$$FloatRegister, $src$$FloatRegister);
-                     Matcher::vector_length_in_bytes(this) > 16 ?
-                     __ xvffint_s_w($dst$$FloatRegister, $dst$$FloatRegister) :
-                     __  vffint_s_w($dst$$FloatRegister, $dst$$FloatRegister); break;
-      case T_DOUBLE: __ vext2xv_d_b($dst$$FloatRegister, $src$$FloatRegister);
-                     assert(Matcher::vector_length_in_bytes(this) > 16, "only support 4Bto4D");
-                     __ xvffint_d_l($dst$$FloatRegister, $dst$$FloatRegister); break;
-      default:
-        ShouldNotReachHere();
+    BasicType dst_bt = Matcher::vector_element_basic_type(this);
+    if (Matcher::vector_length_in_bytes(this) <= 16) {
+      BasicType unpack_bt = (dst_bt == T_SHORT) ? T_SHORT :
+                            (dst_bt == T_INT || dst_bt == T_FLOAT) ? T_INT : T_LONG;
+      __ vector_unpack_low($dst$$FloatRegister, $src$$FloatRegister,
+                           T_BYTE, unpack_bt, true, fscratch);
+      if (dst_bt == T_FLOAT) {
+        __ vffint_s_w($dst$$FloatRegister, $dst$$FloatRegister);
+      } else if (dst_bt == T_DOUBLE) {
+        __ vffint_d_l($dst$$FloatRegister, $dst$$FloatRegister);
+      }
+    } else {
+      switch (dst_bt) {
+        case T_SHORT : __ vext2xv_h_b($dst$$FloatRegister, $src$$FloatRegister); break;
+        case T_INT   : __ vext2xv_w_b($dst$$FloatRegister, $src$$FloatRegister); break;
+        case T_LONG  : __ vext2xv_d_b($dst$$FloatRegister, $src$$FloatRegister); break;
+        case T_FLOAT : __ vext2xv_w_b($dst$$FloatRegister, $src$$FloatRegister);
+                       __ xvffint_s_w($dst$$FloatRegister, $dst$$FloatRegister); break;
+        case T_DOUBLE: __ vext2xv_d_b($dst$$FloatRegister, $src$$FloatRegister);
+                       __ xvffint_d_l($dst$$FloatRegister, $dst$$FloatRegister); break;
+        default:
+          ShouldNotReachHere();
+      }
     }
   %}
   ins_pipe( pipe_slow );
@@ -14491,26 +14564,40 @@ instruct cvtVS(vReg dst, vReg src) %{
   match(Set dst (VectorCastS2X src));
   format %{ "(x)vconvert    $dst, $src\t# @cvtVS" %}
   ins_encode %{
-    if (Matcher::vector_length_in_bytes(this, $src) > 16 && Matcher::vector_element_basic_type(this) == T_BYTE) {
-      __ xvpermi_q(fscratch, $src$$FloatRegister, 0x00);
-      __ xvpermi_q($dst$$FloatRegister, $src$$FloatRegister, 0x11);
-    }
-    switch (Matcher::vector_element_basic_type(this)) {
-      case T_BYTE  : Matcher::vector_length_in_bytes(this, $src) > 16 ?
-                     __ vsrlni_b_h($dst$$FloatRegister, fscratch, 0) :
-                     __ vsrlni_b_h($dst$$FloatRegister, $src$$FloatRegister, 0); break;
-      case T_INT   : __ vext2xv_w_h($dst$$FloatRegister, $src$$FloatRegister); break;
-      case T_LONG  : __ vext2xv_d_h($dst$$FloatRegister, $src$$FloatRegister); break;
-      case T_FLOAT : __ vext2xv_w_h($dst$$FloatRegister, $src$$FloatRegister);
-                     Matcher::vector_length_in_bytes(this) > 16 ?
-                     __ xvffint_s_w($dst$$FloatRegister, $dst$$FloatRegister) :
-                     __  vffint_s_w($dst$$FloatRegister, $dst$$FloatRegister); break;
-      case T_DOUBLE: __ vext2xv_d_h($dst$$FloatRegister, $src$$FloatRegister);
-                     Matcher::vector_length_in_bytes(this) > 16 ?
-                     __ xvffint_d_l($dst$$FloatRegister, $dst$$FloatRegister) :
-                     __  vffint_d_l($dst$$FloatRegister, $dst$$FloatRegister); break;
-      default:
-        ShouldNotReachHere();
+    BasicType dst_bt = Matcher::vector_element_basic_type(this);
+    bool narrowing = dst_bt == T_BYTE;
+    bool use_lsx = narrowing ?
+        Matcher::vector_length_in_bytes(this, $src) <= 16 :
+        Matcher::vector_length_in_bytes(this) <= 16;
+    if (use_lsx) {
+      if (dst_bt == T_BYTE) {
+        __ vsrlni_b_h($dst$$FloatRegister, $src$$FloatRegister, 0);
+      } else {
+        BasicType unpack_bt = (dst_bt == T_INT || dst_bt == T_FLOAT) ? T_INT : T_LONG;
+        __ vector_unpack_low($dst$$FloatRegister, $src$$FloatRegister,
+                             T_SHORT, unpack_bt, true, fscratch);
+        if (dst_bt == T_FLOAT) {
+          __ vffint_s_w($dst$$FloatRegister, $dst$$FloatRegister);
+        } else if (dst_bt == T_DOUBLE) {
+          __ vffint_d_l($dst$$FloatRegister, $dst$$FloatRegister);
+        }
+      }
+    } else {
+      if (Matcher::vector_element_basic_type(this) == T_BYTE) {
+        __ xvpermi_q(fscratch, $src$$FloatRegister, 0x00);
+        __ xvpermi_q($dst$$FloatRegister, $src$$FloatRegister, 0x11);
+      }
+      switch (dst_bt) {
+        case T_BYTE  : __ vsrlni_b_h($dst$$FloatRegister, fscratch, 0); break;
+        case T_INT   : __ vext2xv_w_h($dst$$FloatRegister, $src$$FloatRegister); break;
+        case T_LONG  : __ vext2xv_d_h($dst$$FloatRegister, $src$$FloatRegister); break;
+        case T_FLOAT : __ vext2xv_w_h($dst$$FloatRegister, $src$$FloatRegister);
+                       __ xvffint_s_w($dst$$FloatRegister, $dst$$FloatRegister); break;
+        case T_DOUBLE: __ vext2xv_d_h($dst$$FloatRegister, $src$$FloatRegister);
+                       __ xvffint_d_l($dst$$FloatRegister, $dst$$FloatRegister); break;
+        default:
+          ShouldNotReachHere();
+      }
     }
   %}
   ins_pipe( pipe_slow );
@@ -14522,7 +14609,8 @@ instruct cvtVI(vReg dst, vReg src) %{
   match(Set dst (VectorCastI2X src));
   format %{ "(x)vconvert    $dst, $src\t# @cvtVI" %}
   ins_encode %{
-    if (Matcher::vector_length_in_bytes(this, $src) > 16 && type2aelembytes(Matcher::vector_element_basic_type(this)) < 4) {
+    if (Matcher::vector_length_in_bytes(this, $src) > 16 &&
+        type2aelembytes(Matcher::vector_element_basic_type(this)) < 4) {
       __ xvpermi_q(fscratch, $src$$FloatRegister, 0x00);
       __ xvpermi_q($dst$$FloatRegister, $src$$FloatRegister, 0x11);
     }
@@ -15000,11 +15088,17 @@ instruct loadmaskV(vReg dst, vReg src) %{
     } else {
       switch (Matcher::vector_element_basic_type(this)) {
         case T_BYTE : __ vneg_b($dst$$FloatRegister, $src$$FloatRegister); break;
-        case T_SHORT: __ vext2xv_h_b($dst$$FloatRegister, $src$$FloatRegister);
+        case T_SHORT: __ vector_unpack_low($dst$$FloatRegister, $src$$FloatRegister,
+                                           T_BYTE, T_SHORT, false, fscratch);
                       __ vneg_h($dst$$FloatRegister, $dst$$FloatRegister); break;
         case T_FLOAT:
-        case T_INT  : __ vext2xv_w_b($dst$$FloatRegister, $src$$FloatRegister);
+        case T_INT  : __ vector_unpack_low($dst$$FloatRegister, $src$$FloatRegister,
+                                           T_BYTE, T_INT, false, fscratch);
                       __ vneg_w($dst$$FloatRegister, $dst$$FloatRegister); break;
+        case T_DOUBLE:
+        case T_LONG : __ vector_unpack_low($dst$$FloatRegister, $src$$FloatRegister,
+                                           T_BYTE, T_LONG, false, fscratch);
+                      __ vneg_d($dst$$FloatRegister, $dst$$FloatRegister); break;
         default:
           ShouldNotReachHere();
       }
@@ -15067,7 +15161,12 @@ instruct vmaskcast_gt(vReg dst, vReg src) %{
   match(Set dst (VectorMaskCast src));
   format %{ "(x)vmaskcast    $dst\t# @vmaskcast_gt" %}
   ins_encode %{
-    if (Matcher::vector_element_basic_type(this, $src) == T_BYTE) {
+    if (Matcher::vector_length_in_bytes(this) <= 16) {
+      BasicType src_bt = Matcher::vector_element_basic_type(this, $src);
+      BasicType dst_bt = Matcher::vector_element_basic_type(this);
+      __ vector_unpack_low($dst$$FloatRegister, $src$$FloatRegister,
+                           src_bt, dst_bt, true, fscratch);
+    } else if (Matcher::vector_element_basic_type(this, $src) == T_BYTE) {
       switch (Matcher::vector_element_basic_type(this)) {
         case T_SHORT : __ vext2xv_h_b($dst$$FloatRegister, $src$$FloatRegister); break;
         case T_FLOAT :

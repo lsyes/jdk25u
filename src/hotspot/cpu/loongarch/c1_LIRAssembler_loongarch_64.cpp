@@ -1067,6 +1067,8 @@ void LIR_Assembler::emit_cmp_branch(LIR_OpBranch* op) {
           __ li(reg2, imm2);
         }
       }
+      bool fusable = !L.is_bound();
+      address fusable_branch = __ pc();
       switch (op->condition()) {
         case lir_cond_equal:
           __ beq_far(reg1, reg2, L); break;
@@ -1087,7 +1089,52 @@ void LIR_Assembler::emit_cmp_branch(LIR_OpBranch* op) {
         default:
           ShouldNotReachHere();
       }
+      if (fusable) {
+        _fusable_branches.append(fusable_branch);
+      }
     }
+  }
+}
+
+void LIR_Assembler::finalize_code() {
+  // Forward labels are initially emitted as:
+  //   inverse-cond +8
+  //   b target
+  // If target is reachable from a short conditional branch, turn this into:
+  //   cond target
+  //   nop
+  // The instruction size is unchanged, so labels, relocations and debug info
+  // retain their original offsets.
+  address begin = __ code()->insts()->start();
+  for (int i = 0; i < _fusable_branches.length(); i++) {
+    address p = _fusable_branches.at(i);
+    int conditional = *reinterpret_cast<int*>(p);
+    int opcode = Assembler::high(conditional, 6);
+    if (opcode != Assembler::beq_op && opcode != Assembler::bne_op &&
+        opcode != Assembler::blt_op && opcode != Assembler::bge_op &&
+        opcode != Assembler::bltu_op && opcode != Assembler::bgeu_op) {
+      continue;
+    }
+    int16_t skip = static_cast<int16_t>(conditional >> 10);
+    if (skip != 2) {
+      continue;
+    }
+
+    int unconditional = *reinterpret_cast<int*>(p + BytesPerInstWord);
+    if (Assembler::high(unconditional, 6) != Assembler::b_op) {
+      continue;
+    }
+    int32_t branch_offs = static_cast<int32_t>((unconditional >> 10) & 0x03ffffff);
+    branch_offs = (branch_offs << 6) >> 6;
+    address target = p + BytesPerInstWord + (branch_offs << 2);
+    if (!Assembler::is_simm((target - p) >> 2, 16)) {
+      continue;
+    }
+
+    int inverted = conditional ^ (1 << 26);
+    *reinterpret_cast<int*>(p) =
+        MacroAssembler::patched_branch(target - begin, inverted, p - begin);
+    *reinterpret_cast<int*>(p + BytesPerInstWord) = 0x03400000; // nop
   }
 }
 

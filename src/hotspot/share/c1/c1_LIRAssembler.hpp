@@ -48,6 +48,10 @@ class LIR_Assembler: public CompilationResourceObj {
 
   Label              _unwind_handler_entry;
 
+#ifdef LOONGARCH
+  GrowableArray<address> _fusable_branches;
+#endif
+
 #ifdef ASSERT
   BlockList          _branch_target_blocks;
   void check_no_unbound_labels();
@@ -76,6 +80,7 @@ class LIR_Assembler: public CompilationResourceObj {
   // code emission patterns and accessors
   void check_codespace();
   bool needs_icache(ciMethod* method) const;
+  void finalize_code();
 
   // returns offset of icache check
   int check_icache();

@@ -334,6 +334,11 @@ class MacroAssembler: public Assembler {
   void java_round_double_lasx(FloatRegister dst, FloatRegister src,
                               FloatRegister vtemp1, FloatRegister vtemp2);
 
+  // Widen the low half with GCC's LSX vsllwil.{h.b,w.h,d.w} selection.
+  void vector_unpack_low(FloatRegister dst, FloatRegister src,
+                         BasicType src_bt, BasicType dst_bt,
+                         bool sign_extend, FloatRegister tmp);
+
   // allocation
   void tlab_allocate(
     Register obj,                      // result: pointer to object after successful allocation
