@@ -8787,19 +8787,17 @@ instruct umodI_Reg_Reg(mRegI dst, mRegIorL2I src1, mRegIorL2I src2) %{
 // div/mod (12 cycles for 32 bit, 25 cycles for 64 bit on LA664).
 //
 // GCC expands these into a multiply-high/shift sequence (expand_divmod in
-// gcc/expmed.cc using choose_multiplier).  The full sequence *and* its
-// instruction selection are produced by the Rust planner in
-// rust/la_sched.rs, called through la_plan_udivmod; the C++ side only emits
-// the returned instructions (C2_MacroAssembler::rust_udivmod).
+// gcc/expmed.cc using choose_multiplier).  C2_MacroAssembler::udivmod_imm
+// computes the magic multiplier and emits the sequence directly.
 instruct udivI_imm(mRegI dst, mRegIorL2I src1, immI con, mRegI tmp1, mRegI tmp2) %{
   match(Set dst (UDivI src1 con));
   effect(TEMP tmp1, TEMP tmp2);
   ins_cost(30);
-  format %{ "udivI_imm  $dst, $src1, $con\t# Rust planned" %}
+  format %{ "udivI_imm  $dst, $src1, $con" %}
   ins_encode %{
-    __ rust_udivmod(false, false, (julong)(juint)$con$$constant,
-                    $dst$$Register, $src1$$Register,
-                    $tmp1$$Register, $tmp2$$Register);
+    __ udivmod_imm(false, false, (julong)(juint)$con$$constant,
+                   $dst$$Register, $src1$$Register,
+                   $tmp1$$Register, $tmp2$$Register);
   %}
   ins_pipe( ialu_mult );
 %}
@@ -8808,11 +8806,11 @@ instruct umodI_imm(mRegI dst, mRegIorL2I src1, immI con, mRegI tmp1, mRegI tmp2)
   match(Set dst (UModI src1 con));
   effect(TEMP tmp1, TEMP tmp2);
   ins_cost(30);
-  format %{ "umodI_imm  $dst, $src1, $con\t# Rust planned" %}
+  format %{ "umodI_imm  $dst, $src1, $con" %}
   ins_encode %{
-    __ rust_udivmod(false, true, (julong)(juint)$con$$constant,
-                    $dst$$Register, $src1$$Register,
-                    $tmp1$$Register, $tmp2$$Register);
+    __ udivmod_imm(false, true, (julong)(juint)$con$$constant,
+                   $dst$$Register, $src1$$Register,
+                   $tmp1$$Register, $tmp2$$Register);
   %}
   ins_pipe( ialu_mult );
 %}
@@ -8821,11 +8819,11 @@ instruct udivL_imm(mRegL dst, mRegLorI2L src1, immL con, mRegL tmp1, mRegL tmp2)
   match(Set dst (UDivL src1 con));
   effect(TEMP tmp1, TEMP tmp2);
   ins_cost(30);
-  format %{ "udivL_imm  $dst, $src1, $con\t# Rust planned" %}
+  format %{ "udivL_imm  $dst, $src1, $con" %}
   ins_encode %{
-    __ rust_udivmod(true, false, (julong)$con$$constant,
-                    $dst$$Register, $src1$$Register,
-                    $tmp1$$Register, $tmp2$$Register);
+    __ udivmod_imm(true, false, (julong)$con$$constant,
+                   $dst$$Register, $src1$$Register,
+                   $tmp1$$Register, $tmp2$$Register);
   %}
   ins_pipe( ialu_mult );
 %}
@@ -8834,11 +8832,11 @@ instruct umodL_imm(mRegL dst, mRegLorI2L src1, immL con, mRegL tmp1, mRegL tmp2)
   match(Set dst (UModL src1 con));
   effect(TEMP tmp1, TEMP tmp2);
   ins_cost(30);
-  format %{ "umodL_imm  $dst, $src1, $con\t# Rust planned" %}
+  format %{ "umodL_imm  $dst, $src1, $con" %}
   ins_encode %{
-    __ rust_udivmod(true, true, (julong)$con$$constant,
-                    $dst$$Register, $src1$$Register,
-                    $tmp1$$Register, $tmp2$$Register);
+    __ udivmod_imm(true, true, (julong)$con$$constant,
+                   $dst$$Register, $src1$$Register,
+                   $tmp1$$Register, $tmp2$$Register);
   %}
   ins_pipe( ialu_mult );
 %}

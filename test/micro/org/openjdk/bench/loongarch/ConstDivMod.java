@@ -45,8 +45,8 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li>signed division/remainder by an invariant divisor (magic number
  *       multiply high, {@code mulh.w});</li>
- *   <li>unsigned division/remainder by an invariant divisor (planned by the
- *       Rust instruction scheduler, {@code mulh.wu}/{@code mulh.du});</li>
+ *   <li>unsigned division/remainder by an invariant divisor (magic number
+ *       multiply high, {@code mulh.wu}/{@code mulh.du});</li>
  *   <li>{@code x*3}, {@code x*5}, {@code x*9} which a single {@code alsl}
  *       implements.</li>
  * </ul>

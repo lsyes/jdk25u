@@ -120,10 +120,7 @@ define_pd_global(intx, InitArrayShortSize, 8*BytesPerLong);
                                                                             \
   product(bool, TraceTraps, false, "Trace all traps the signal handler")    \
   product(uintx, NUMAMinG1RegionNumberPerNode, 8,                           \
-          "Min initial region number for per NUMA node while using G1GC")   \
-                                                                            \
-  product(bool, UseLATraceScheduler, false,                                 \
-          "Use the Rust trace layout scheduler for the C2 block layout")
+          "Min initial region number for per NUMA node while using G1GC")
 
 // end of ARCH_FLAGS
 

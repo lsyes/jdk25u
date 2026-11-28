@@ -32,10 +32,8 @@
 #include "opto/subnode.hpp"
 #include "runtime/objectMonitor.hpp"
 #include "runtime/stubRoutines.hpp"
-#ifdef LA_RUST_SCHED
-#include "la_sched_ffi.hpp"
-#endif
 #include "utilities/globalDefinitions.hpp"
+#include "utilities/powerOfTwo.hpp"
 
 #ifdef PRODUCT
 #define BLOCK_COMMENT(str) /* nothing */
@@ -2348,57 +2346,314 @@ void C2_MacroAssembler::vector_compare(FloatRegister dst, FloatRegister src1, Fl
   }
 }
 
-// Emit the instruction sequence planned by the Rust scheduler for an unsigned
-// division or remainder by a constant divisor.  Fall back to the hardware
-// div/mod instruction if the planner rejects the input (for example when the
-// temporary register assignment is unusable).
-void C2_MacroAssembler::rust_udivmod(bool is64, bool ismod, julong d,
-                                     Register dst, Register src,
-                                     Register t1, Register t2) {
-#ifdef LA_RUST_SCHED
-  LaInsn plan[16];
-  int n = la_plan_udivmod(is64 ? 1 : 0, ismod ? 1 : 0, (unsigned long)d,
-                          dst->encoding(), src->encoding(),
-                          t1->encoding(), t2->encoding(), plan, 16);
-  if (n > 0) {
-    for (int i = 0; i < n; i++) {
-      Register rd = as_Register(plan[i].rd);
-      Register rj = as_Register(plan[i].rj);
-      Register rk = as_Register(plan[i].rk);
-      switch (plan[i].op) {
-        case LA_OP_MOVE_W:  move(rd, rj); break;
-        case LA_OP_MOVE_D:  move(rd, rj); break;
-        case LA_OP_LI:      li(rd, plan[i].imm); break;
-        case LA_OP_MULH_WU: mulh_wu(rd, rj, rk); break;
-        case LA_OP_MULH_DU: mulh_du(rd, rj, rk); break;
-        case LA_OP_SRLI_W:  srli_w(rd, rj, (int)plan[i].imm); break;
-        case LA_OP_SRLI_D:  srli_d(rd, rj, (int)plan[i].imm); break;
-        case LA_OP_SUB_W:   sub_w(rd, rj, rk); break;
-        case LA_OP_SUB_D:   sub_d(rd, rj, rk); break;
-        case LA_OP_ADD_W:   add_w(rd, rj, rk); break;
-        case LA_OP_ADD_D:   add_d(rd, rj, rk); break;
-        case LA_OP_MUL_W:   mul_w(rd, rj, rk); break;
-        case LA_OP_MUL_D:   mul_d(rd, rj, rk); break;
-        case LA_OP_AND:     AND(rd, rj, rk); break;
-        case LA_OP_ANDI:    andi(rd, rj, (int)plan[i].imm); break;
-        case LA_OP_SLTU:    sltu(rd, rj, rk); break;
-        case LA_OP_XORI:    xori(rd, rj, (int)plan[i].imm); break;
-        case LA_OP_DIV_WU:  div_wu(rd, rj, rk); break;
-        case LA_OP_DIV_DU:  div_du(rd, rj, rk); break;
-        case LA_OP_MOD_WU:  mod_wu(rd, rj, rk); break;
-        case LA_OP_MOD_DU:  mod_du(rd, rj, rk); break;
-        case LA_OP_ZEXT_W:  bstrpick_d(rd, rj, 31, 0); break;
-        default:            ShouldNotReachHere(); break;
+namespace {
+
+class LaUInt128 {
+  uint64_t _hi;
+  uint64_t _lo;
+
+ public:
+  constexpr LaUInt128(uint64_t hi, uint64_t lo) : _hi(hi), _lo(lo) {}
+
+  static LaUInt128 power_of_two(uint32_t bit) {
+    assert(bit < 128, "invalid bit");
+    return bit < 64 ? LaUInt128(0, UCONST64(1) << bit)
+                    : LaUInt128(UCONST64(1) << (bit - 64), 0);
+  }
+
+  uint64_t low() const {
+    return _lo;
+  }
+
+  bool bit(uint32_t index) const {
+    assert(index < 128, "invalid bit");
+    return index < 64 ? ((_lo >> index) & 1) != 0
+                      : ((_hi >> (index - 64)) & 1) != 0;
+  }
+
+  void set_bit(uint32_t index) {
+    assert(index < 128, "invalid bit");
+    if (index < 64) {
+      _lo |= UCONST64(1) << index;
+    } else {
+      _hi |= UCONST64(1) << (index - 64);
+    }
+  }
+
+  void shift_right_one() {
+    _lo = (_lo >> 1) | (_hi << 63);
+    _hi >>= 1;
+  }
+
+  LaUInt128 add(const LaUInt128& other) const {
+    uint64_t sum = _lo + other._lo;
+    uint64_t carry = sum < _lo ? 1 : 0;
+    return LaUInt128(_hi + other._hi + carry, sum);
+  }
+
+  LaUInt128 add_power_of_two(uint32_t bit) const {
+    return add(power_of_two(bit));
+  }
+
+  bool is_greater_than_low_mask(uint32_t bits) const {
+    assert(bits <= 64, "invalid mask");
+    const uint64_t mask = bits == 64 ? ~UCONST64(0) : (UCONST64(1) << bits) - 1;
+    return _hi != 0 || _lo > mask;
+  }
+
+  LaUInt128 divide(uint64_t divisor, uint64_t* remainder) const {
+    assert(divisor != 0, "division by zero");
+    LaUInt128 quotient(0, 0);
+    uint64_t rem = 0;
+    for (int i = 127; i >= 0; i--) {
+      uint64_t next_rem = rem + rem;
+      const bool carry = next_rem < rem;
+      next_rem += bit((uint32_t)i) ? 1 : 0;
+      if (carry || next_rem >= divisor) {
+        rem = next_rem - divisor;
+        quotient.set_bit((uint32_t)i);
+      } else {
+        rem = next_rem;
+      }
+    }
+    *remainder = rem;
+    return quotient;
+  }
+};
+
+struct LaMagic {
+  uint64_t multiplier;
+  uint32_t post_shift;
+  bool needs_add;
+};
+
+// Port of gcc/expmed.cc:choose_multiplier.  n is the number of significant
+// bits of the dividend and precision is the width of the operation.
+LaMagic la_choose_multiplier(uint64_t divisor, uint32_t n, uint32_t precision) {
+  uint32_t lgup = 0;
+  uint64_t power = 1;
+  while (power < divisor) {
+    power <<= 1;
+    lgup++;
+  }
+
+  assert(n + lgup - precision < 128, "power of two is out of range");
+  const uint32_t pow1 = n + lgup;
+  const uint32_t pow2 = n + lgup - precision;
+  uint64_t remainder = 0;
+  const LaUInt128 twopow1 = LaUInt128::power_of_two(pow1);
+  LaUInt128 mlow = twopow1.divide(divisor, &remainder);
+  LaUInt128 mhigh = twopow1.add_power_of_two(pow2).divide(divisor, &remainder);
+  uint32_t post_shift = lgup;
+
+  while (post_shift > 0) {
+    LaUInt128 next_mlow = mlow;
+    LaUInt128 next_mhigh = mhigh;
+    next_mlow.shift_right_one();
+    next_mhigh.shift_right_one();
+    if (next_mlow.low() >= next_mhigh.low()) {
+      break;
+    }
+    mlow = LaUInt128(0, next_mlow.low());
+    mhigh = LaUInt128(0, next_mhigh.low());
+    post_shift--;
+  }
+
+  return LaMagic {mhigh.low(), post_shift, mhigh.is_greater_than_low_mask(n)};
+}
+
+void la_emit_udivmod32(C2_MacroAssembler* masm, uint32_t d, bool is_mod,
+                       Register dst, Register src, Register t1, Register t2) {
+  const Register q = is_mod ? t2 : dst;
+
+  if (d == 0) {
+    masm->li(t1, (jlong)0);
+    if (is_mod) {
+      masm->mod_wu(dst, src, t1);
+    } else {
+      masm->div_wu(dst, src, t1);
+    }
+    return;
+  }
+  if (d == 1) {
+    if (is_mod) {
+      masm->li(dst, (jlong)0);
+    } else {
+      masm->move(dst, src);
+    }
+    return;
+  }
+  if (is_power_of_2(d)) {
+    if (is_mod) {
+      const int mask = (int)(d - 1);
+      if (mask <= 0xfff) {
+        masm->andi(dst, src, mask);
+      } else {
+        masm->li(t1, mask);
+        masm->AND(dst, src, t1);
+      }
+    } else {
+      masm->srli_w(dst, src, (int)count_trailing_zeros(d));
+    }
+    return;
+  }
+
+  if (d >= UCONST64(0x80000000)) {
+    // The quotient is zero or one.  sltu is a 64 bit unsigned compare, so
+    // zero extend the int operand first.
+    masm->li(t1, d);
+    masm->bstrpick_d(q, src, 31, 0);
+    masm->sltu(q, q, t1);
+    masm->xori(q, q, 1);
+  } else {
+    LaMagic magic = la_choose_multiplier(d, 32, 32);
+    uint32_t pre_shift = 0;
+    if (magic.needs_add && (d & 1) == 0) {
+      pre_shift = count_trailing_zeros(d);
+      magic = la_choose_multiplier(d >> pre_shift, 32, 32 - pre_shift);
+    }
+
+    if (pre_shift > 0) {
+      masm->srli_w(t1, src, (int)pre_shift);
+      masm->li(t2, (jlong)magic.multiplier);
+      masm->mulh_wu(q, t1, t2);
+      if (magic.post_shift > 0) {
+        masm->srli_w(q, q, (int)magic.post_shift);
+      }
+    } else if (magic.needs_add) {
+      masm->li(t1, (jlong)magic.multiplier);
+      masm->mulh_wu(t2, src, t1);
+      masm->sub_w(t1, src, t2);
+      masm->srli_w(t1, t1, 1);
+      masm->add_w(t2, t2, t1);
+      masm->srli_w(q, t2, (int)magic.post_shift - 1);
+    } else {
+      masm->li(t1, (jlong)magic.multiplier);
+      masm->mulh_wu(q, src, t1);
+      if (magic.post_shift > 0) {
+        masm->srli_w(q, q, (int)magic.post_shift);
+      }
+    }
+  }
+
+  if (is_mod) {
+    // remainder = dividend - quotient * divisor
+    masm->li(t1, (jlong)d);
+    masm->mul_w(t1, t2, t1);
+    masm->sub_w(dst, src, t1);
+  }
+}
+
+void la_emit_udivmod64(C2_MacroAssembler* masm, uint64_t d, bool is_mod,
+                       Register dst, Register src, Register t1, Register t2) {
+  const Register q = is_mod ? t2 : dst;
+
+  if (d == 0) {
+    masm->li(t1, (jlong)0);
+    if (is_mod) {
+      masm->mod_du(dst, src, t1);
+    } else {
+      masm->div_du(dst, src, t1);
+    }
+    return;
+  }
+  if (d == 1) {
+    if (is_mod) {
+      masm->li(dst, (jlong)0);
+    } else {
+      masm->move(dst, src);
+    }
+    return;
+  }
+  if (is_power_of_2(d)) {
+    if (is_mod) {
+      masm->li(t1, (jlong)(d - 1));
+      masm->AND(dst, src, t1);
+    } else {
+      masm->srli_d(dst, src, (int)count_trailing_zeros(d));
+    }
+    return;
+  }
+
+  if (d >= UCONST64(0x8000000000000000)) {
+    masm->li(t1, (jlong)d);
+    masm->sltu(q, src, t1);
+    masm->xori(q, q, 1);
+  } else {
+    LaMagic magic = la_choose_multiplier(d, 64, 64);
+    uint32_t pre_shift = 0;
+    if (magic.needs_add && (d & 1) == 0) {
+      pre_shift = count_trailing_zeros(d);
+      magic = la_choose_multiplier(d >> pre_shift, 64, 64 - pre_shift);
+    }
+
+    if (pre_shift > 0) {
+      masm->srli_d(t1, src, (int)pre_shift);
+      masm->li(t2, (jlong)magic.multiplier);
+      masm->mulh_du(q, t1, t2);
+      if (magic.post_shift > 0) {
+        masm->srli_d(q, q, (int)magic.post_shift);
+      }
+    } else if (magic.needs_add) {
+      masm->li(t1, (jlong)magic.multiplier);
+      masm->mulh_du(t2, src, t1);
+      masm->sub_d(t1, src, t2);
+      masm->srli_d(t1, t1, 1);
+      masm->add_d(t2, t2, t1);
+      masm->srli_d(q, t2, (int)magic.post_shift - 1);
+    } else {
+      masm->li(t1, (jlong)magic.multiplier);
+      masm->mulh_du(q, src, t1);
+      if (magic.post_shift > 0) {
+        masm->srli_d(q, q, (int)magic.post_shift);
+      }
+    }
+  }
+
+  if (is_mod) {
+    masm->li(t1, (jlong)d);
+    masm->mul_d(t1, t2, t1);
+    masm->sub_d(dst, src, t1);
+  }
+}
+
+} // anonymous namespace
+
+void C2_MacroAssembler::udivmod_imm(bool is64, bool ismod, julong d,
+                                    Register dst, Register src,
+                                    Register t1, Register t2) {
+  if (dst == t1 || dst == t2 || t1 == t2 || src == t1 || src == t2) {
+    Register divisor = t1;
+    if (divisor == src) {
+      divisor = t2;
+    }
+    if (divisor == src) {
+      divisor = dst;
+    }
+    if (divisor == src) {
+      divisor = AT;
+    }
+    li(divisor, (jlong)d);
+    if (is64) {
+      if (ismod) {
+        mod_du(dst, src, divisor);
+      } else {
+        div_du(dst, src, divisor);
+      }
+    } else {
+      if (ismod) {
+        mod_wu(dst, src, divisor);
+      } else {
+        div_wu(dst, src, divisor);
       }
     }
     return;
   }
-#endif
-  li(t1, (jlong)d);
+
   if (is64) {
-    if (ismod) { mod_du(dst, src, t1); } else { div_du(dst, src, t1); }
+    la_emit_udivmod64(this, d, ismod, dst, src, t1, t2);
   } else {
-    if (ismod) { mod_wu(dst, src, t1); } else { div_wu(dst, src, t1); }
+    la_emit_udivmod32(this, (uint32_t)d, ismod, dst, src, t1, t2);
   }
 }
 

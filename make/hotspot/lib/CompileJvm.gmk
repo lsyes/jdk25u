@@ -175,24 +175,6 @@ endif
 ## Build libjvm
 ################################################################################
 
-# LoongArch: Rust machine-level trace scheduler.
-#
-# src/hotspot/cpu/loongarch/rust/la_sched.rs is a small no_std Rust static
-# library that orders C2 traces so that hot edges become fall-through edges.
-# It is linked into libjvm and reached through the plain C ABI declared in
-# la_sched_ffi.hpp.  If rustc is not available the VM still builds and C2
-# keeps its generic frequency based trace ordering.
-ifeq ($(call isTargetCpuArch, loongarch), true)
-  LA_RUSTC := $(shell command -v rustc 2>/dev/null)
-  ifneq ($(LA_RUSTC), )
-    LA_RUST_SRC := $(TOPDIR)/src/hotspot/cpu/loongarch/rust/la_sched.rs
-    LA_RUST_LIB := $(JVM_OUTPUTDIR)/la_sched/libla_sched.a
-
-    JVM_CFLAGS += -DLA_RUST_SCHED
-    JVM_LIBS += $(LA_RUST_LIB)
-  endif
-endif
-
 $(eval $(call SetupJdkLibrary, BUILD_LIBJVM, \
     NAME := jvm, \
     LINK_TYPE := C++, \
@@ -333,20 +315,6 @@ endif
 # 1540-1639 : (I) The behavior of long type bit fields has changed ...
 
 TARGETS += $(BUILD_LIBJVM)
-
-# Build the LoongArch Rust trace scheduler and make the JVM link depend on it.
-ifeq ($(call isTargetCpuArch, loongarch), true)
-  ifneq ($(LA_RUSTC), )
-    $(LA_RUST_LIB): $(LA_RUST_SRC)
-	@mkdir -p $(@D)
-	$(LA_RUSTC) --edition 2021 --crate-type staticlib \
-	    -C opt-level=3 -C panic=abort -C codegen-units=1 \
-	    -C relocation-model=pic -C debuginfo=0 \
-	    -o $@ $(LA_RUST_SRC)
-
-    $(BUILD_LIBJVM): $(LA_RUST_LIB)
-  endif
-endif
 
 ################################################################################
 # Hotspot disallows the use of global operators 'new' and 'delete'. This build

@@ -30,10 +30,8 @@
 
 public:
   // Instruction selection for unsigned division/remainder by a constant.
-  // The sequence is planned by the Rust scheduler (rust/la_sched.rs); when the
-  // planner is unavailable a hardware div/mod is emitted instead.
-  void rust_udivmod(bool is64, bool ismod, julong divisor,
-                    Register dst, Register src, Register t1, Register t2);
+  void udivmod_imm(bool is64, bool ismod, julong divisor,
+                   Register dst, Register src, Register t1, Register t2);
   void cmp_branch_short(int flag, Register op1, Register op2, Label& L, bool is_signed);
   void cmp_branch_long(int flag, Register op1, Register op2, Label* L, bool is_signed);
   void cmp_branchEqNe_off21(int flag, Register op1, Label& L);

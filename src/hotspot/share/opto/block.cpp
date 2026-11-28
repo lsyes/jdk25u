@@ -36,9 +36,6 @@
 #include "opto/rootnode.hpp"
 #include "utilities/copy.hpp"
 #include "utilities/powerOfTwo.hpp"
-#ifdef LA_RUST_SCHED
-#include "la_sched_ffi.hpp"
-#endif
 
 void Block_Array::grow(uint i) {
   assert(i >= Max(), "Should have been checked before, use maybe_grow?");
@@ -1791,73 +1788,8 @@ void PhaseBlockLayout::reorder_traces(int count) {
   Trace* tr = trace(_cfg.get_root_block());
   assert(tr == new_traces[0], "entry trace misplaced");
 
-#ifdef LA_RUST_SCHED
-  // Let the Rust scheduler pick a layout that turns the hottest edges between
-  // traces into fall-through edges (GCC's bb-reorder does the same for RTL
-  // basic blocks).  It falls back to the generic frequency ordering when the
-  // library is unavailable or rejects the input.
-  bool scheduled = false;
-  if (UseLATraceScheduler && new_count > 2 && la_sched_version() == LA_SCHED_ABI_VERSION) {
-    const int nb = (int)_cfg.number_of_blocks();
-    int* trace_index = NEW_RESOURCE_ARRAY(int, nb);
-    for (int i = 0; i < nb; i++) {
-      trace_index[i] = -1;
-    }
-    LaTraceInfo* info = NEW_RESOURCE_ARRAY(LaTraceInfo, new_count);
-    for (int i = 0; i < new_count; i++) {
-      Trace* t = new_traces[i];
-      Block* first = t->first_block();
-      info[i].first = (int)first->_pre_order;
-      info[i].last = (int)t->last_block()->_pre_order;
-      info[i].freq = (double)first->_freq;
-      info[i].is_connector = first->is_connector() ? 1 : 0;
-      trace_index[first->_pre_order] = i;
-    }
-
-    // Collect the candidate fall-through edges: an edge from the last block of
-    // one trace to the first block of another trace can become a fall-through
-    // if the destination trace is laid out right after the source trace.
-    const int max_edges = edges->length();
-    LaTraceEdge* fallthrough = NEW_RESOURCE_ARRAY(LaTraceEdge, max_edges > 0 ? max_edges : 1);
-    int fallthrough_count = 0;
-    for (int i = 0; i < max_edges; i++) {
-      CFGEdge* e = edges->at(i);
-      Trace* from = trace(e->from());
-      Trace* to = trace(e->to());
-      if (from == to || e->from() != from->last_block() || e->to() != to->first_block()) {
-        continue;
-      }
-      int fi = trace_index[from->first_block()->_pre_order];
-      int ti = trace_index[to->first_block()->_pre_order];
-      if (fi < 0 || ti < 0) {
-        continue;
-      }
-      fallthrough[fallthrough_count].from = fi;
-      fallthrough[fallthrough_count].to = ti;
-      fallthrough[fallthrough_count].weight = e->freq();
-      fallthrough_count++;
-    }
-
-    int* order = NEW_RESOURCE_ARRAY(int, new_count);
-    if (la_order_traces(new_count, info, fallthrough_count, fallthrough, order) == new_count) {
-      Trace** reordered = NEW_RESOURCE_ARRAY(Trace*, new_count);
-      for (int i = 0; i < new_count; i++) {
-        reordered[i] = new_traces[order[i]];
-      }
-      for (int i = 0; i < new_count; i++) {
-        new_traces[i] = reordered[i];
-      }
-      scheduled = true;
-    }
-  }
-  if (!scheduled) {
-    // Sort the new trace list by frequency
-    qsort(new_traces + 1, new_count - 1, sizeof(new_traces[0]), trace_frequency_order);
-  }
-#else
   // Sort the new trace list by frequency
   qsort(new_traces + 1, new_count - 1, sizeof(new_traces[0]), trace_frequency_order);
-#endif
 
   // Collect all blocks from existing Traces
   _cfg.clear_blocks();
